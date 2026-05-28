@@ -127,45 +127,160 @@ fig.suptitle(
 )
 
 gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.40, wspace=0.30)
-ax1 = fig.add_subplot(gs[0, 0])   # ① raw IQ
-ax2 = fig.add_subplot(gs[0, 1])   # ② MUSIC
-ax3 = fig.add_subplot(gs[1, 0])   # ③ MVDR beampattern
-ax4 = fig.add_subplot(gs[1, 1])   # ④ hybrid SINR  ★
+# Split top-left cell into two stacked subplots (power spectrum + phase)
+gs_fft = gridspec.GridSpecFromSubplotSpec(
+    2, 1, subplot_spec=gs[0, 0], hspace=0.55, height_ratios=[1.6, 1.0]
+)
+ax1a = fig.add_subplot(gs_fft[0])  # ① top:    power spectrum (4 elements)
+ax1b = fig.add_subplot(gs_fft[1])  # ① bottom: phase at jammer bin
+ax2  = fig.add_subplot(gs[0, 1])   # ② MUSIC
+ax3  = fig.add_subplot(gs[1, 0])   # ③ MVDR beampattern
+ax4  = fig.add_subplot(gs[1, 1])   # ④ hybrid SINR  ★
 
-# ── Panel ①: Raw IQ time series ────────────────────────────────────────
-#   Shows the jammer domination: RMS ≈ 32 at each element, but each
-#   element sees a DIFFERENT phase — that's the spatial fingerprint the
-#   algorithms exploit.
+# ── Panel ①: FFT Power + Phase Spectrum — Jammer Spatial Fingerprint ──
+#
+#   Physical insight:
+#     A CW jammer at 45° hits all 4 antennas at the same frequency and the
+#     same power — but each antenna is spatially offset, so the jammer
+#     arrives with a progressively shifted phase.  The FFT reveals this:
+#     all 4 power spectra overlay identically (same spike height), while
+#     the phase at the jammer bin increases by ψ = 127° per element.
+#     MUSIC and MVDR exploit exactly this phase gradient.
+#
+#   Zero-padding 1000 → 10000 gives 1 kHz bin spacing, putting the
+#   jammer (f_if = 1 kHz) at an exact FFT bin for a clean spike.
 
-n_show = 120
-t_us   = np.arange(n_show) / fs * 1e6    # convert samples → microseconds
+n_fft     = 10000                                           # zero-padded length
+freq_axis = np.fft.fftshift(np.fft.fftfreq(n_fft, 1/fs)) / 1e6   # MHz
 
-ax1.plot(t_us, np.real(X[0, :n_show]),
-         color='tomato', linewidth=1.1, zorder=3,
-         label=f'Element 0  (RMS={np.std(np.real(X[0,:])):.0f}  — jammer dominated)')
-ax1.plot(t_us, np.real(X[1, :n_show]),
-         color='royalblue', linewidth=1.1, alpha=0.85, zorder=4,
-         label=f'Element 1  (RMS={np.std(np.real(X[1,:])):.0f}  — different phase)')
+# Jammer bin: f_if = 1000 Hz → bin index = f_if * n_fft / fs = 1 (exact)
+# After fftshift the DC bin is at n_fft//2, so jammer is at n_fft//2 + 1
+f_if_hz   = 1e3
+jam_bin   = n_fft // 2 + int(round(f_if_hz * n_fft / fs))  # = 5001
 
-# Annotate the phase difference between elements
-peak0_idx = np.argmax(np.abs(np.real(X[0, :n_show])))
-peak1_idx = np.argmax(np.abs(np.real(X[1, :n_show])))
-ax1.annotate('',
-             xy=(t_us[peak1_idx], np.real(X[1, peak1_idx])),
-             xytext=(t_us[peak0_idx], np.real(X[0, peak0_idx])),
-             arrowprops=dict(arrowstyle='<->', color='black', lw=1.3))
-ax1.text((t_us[peak0_idx] + t_us[peak1_idx]) / 2 + 0.3,
-         (np.real(X[0, peak0_idx]) + np.real(X[1, peak1_idx])) / 2,
-         'phase\nshift', fontsize=7.5, va='center', style='italic')
+# Theoretical inter-element phase step for jammer at 45°
+psi_rad   = np.pi * np.sin(np.deg2rad(45.0))               # = 2.221 rad
+psi_deg   = np.rad2deg(psi_rad)                            # = 127.28°
 
-ax1.set_xlabel("Time (µs)", fontsize=11)
-ax1.set_ylabel("Amplitude", fontsize=11)
-ax1.set_title("① Raw IQ Data — 4-Channel Array\n"
-              "Each antenna sees jammer at different phase  →  spatial fingerprint",
-              fontsize=10)
-ax1.legend(fontsize=8, loc='upper right')
-ax1.grid(True, alpha=0.3)
-ax1.axhline(0, color='gray', linewidth=0.5, linestyle=':')
+el_colors = ['tomato', 'royalblue', 'limegreen', 'darkorange']
+
+# Compute zero-padded FFT for all 4 elements
+spectra   = [np.fft.fftshift(np.fft.fft(X[ch], n=n_fft)) for ch in range(n_el)]
+
+# Measure phase at jammer bin, relative to element 0
+raw_phases = np.array([np.angle(spectra[ch][jam_bin]) for ch in range(n_el)])
+phase_rel  = (raw_phases - raw_phases[0]) % (2 * np.pi)    # wrapped [0, 2π)
+phase_rel_deg = np.rad2deg(phase_rel)                       # wrapped degrees
+
+# Unwrap: successive difference should be ≈ 127° per element step
+phase_unwrap_deg = np.array([0.0,
+                              phase_rel_deg[1],
+                              phase_rel_deg[2],
+                              phase_rel_deg[2] + phase_rel_deg[1]])
+phase_wrap_deg = phase_unwrap_deg % 360.0                   # for bar annotations
+
+# ── Top sub-panel: Power Spectrum (stacked with vertical offsets) ──────
+#
+#   Without offsets all four power spectra land on top of one another
+#   (identical CW power at every antenna) — unreadable.  Adding -15 dB
+#   per element separates them vertically while preserving the key
+#   message: all spikes have the SAME height relative to their own
+#   noise floor, only the PHASE differs.
+
+n_samples     = X.shape[1]
+freq_mask     = (freq_axis >= -5.0) & (freq_axis <= 5.0)
+stack_offsets = np.array([0, -15, -30, -45])               # dB, element 0 on top
+phase_labels  = ['0°', '127°', '255°', '382°']             # unwrapped phases
+
+# Un-offset spike level (same for every element — this is the key insight)
+spike_pwr = 20 * np.log10(np.abs(spectra[0][jam_bin]) / n_samples + 1e-12)
+
+for ch in range(n_el):
+    offset = stack_offsets[ch]
+    pwr_db = (20 * np.log10(np.abs(spectra[ch][freq_mask]) / n_samples + 1e-12)
+              + offset)
+    ax1a.plot(freq_axis[freq_mask], pwr_db,
+              color=el_colors[ch], linewidth=0.9, alpha=0.92,
+              label=f'El {ch}  φ={phase_labels[ch]}')
+
+    # Arrow from annotation text (right side) to the spike tip
+    spike_y = spike_pwr + offset
+    ax1a.annotate(f'El {ch}: φ={phase_labels[ch]}',
+                  xy=(0.002, spike_y),
+                  xytext=(1.55, spike_y - 2),
+                  fontsize=7.5, color=el_colors[ch], fontweight='bold',
+                  arrowprops=dict(arrowstyle='->', color=el_colors[ch], lw=0.9))
+
+# Vertical reference at jammer frequency
+ax1a.axvline(0.001, color='black', linestyle='--', linewidth=1.3, alpha=0.65,
+             label='Jammer freq (f_if ≈ 0 MHz)')
+
+# Explanation note (bottom-right corner)
+ax1a.text(0.98, 0.03, 'Traces offset −15 dB each for clarity',
+          transform=ax1a.transAxes, ha='right', va='bottom',
+          fontsize=6.8, color='dimgray', style='italic')
+
+ax1a.set_ylabel("Power (dB)", fontsize=9)
+ax1a.set_xlim(-5, 5)
+ax1a.set_ylim(-60, spike_pwr + 15)
+ax1a.set_xticks(np.arange(-5, 6, 1))
+ax1a.tick_params(labelbottom=False)                        # share x-axis with ax1b
+ax1a.set_title("FFT of All 4 Antenna Channels — Jammer Spatial Fingerprint\n"
+               "Same power at all antennas, different phase = spatial fingerprint",
+               fontsize=9, pad=4)
+ax1a.legend(fontsize=7, loc='lower right', ncol=2,
+            handlelength=1.2, columnspacing=0.8)
+ax1a.grid(True, alpha=0.3)
+
+# ── Bottom sub-panel: Phase at Jammer Bin ─────────────────────────────
+#   Stem/bar plot showing the 127° linear progression across elements.
+#   Element 3 is plotted at its unwrapped value (381°) to show linearity,
+#   with its wrapped value (21°) annotated in parentheses.
+
+el_pos  = np.arange(n_el)                                  # [0, 1, 2, 3]
+
+# Draw coloured vertical stems manually (more control than plt.stem)
+for ch in range(n_el):
+    ax1b.plot([ch, ch], [0, phase_unwrap_deg[ch]],
+              color=el_colors[ch], linewidth=3.0, solid_capstyle='round')
+    ax1b.plot(ch, phase_unwrap_deg[ch], 'o',
+              color=el_colors[ch], markersize=9, zorder=5,
+              markeredgecolor='black', markeredgewidth=0.5)
+
+# Overlay the linear-phase fit line (shows ideal 127° progression)
+ax1b.plot(el_pos, el_pos * psi_deg, color='gray', linestyle='--',
+          linewidth=1.0, alpha=0.6, zorder=2, label=f'Δψ = {psi_deg:.0f}°/element')
+
+# 360° wrap reference line
+ax1b.axhline(360, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+ax1b.text(3.3, 363, '360°\n(wrap)', fontsize=6.5, va='bottom', color='gray')
+
+# Annotate each stem with its phase value
+annot = [(0, '0°'), (psi_deg, f'{psi_deg:.0f}°'),
+         (2*psi_deg, f'{2*psi_deg:.0f}°'),
+         (3*psi_deg, f'{3*psi_deg:.0f}°\n(={3*psi_deg%360:.0f}° wrapped)')]
+for ch, (y, txt) in enumerate(annot):
+    yoff = 14 if ch < 3 else 14
+    ax1b.text(ch, y + yoff, txt, ha='center', va='bottom',
+              fontsize=7.5, fontweight='bold', color=el_colors[ch])
+
+# Annotate the Δψ = 127° inter-element steps with double-headed arrows
+for ch in range(3):
+    y0, y1 = phase_unwrap_deg[ch], phase_unwrap_deg[ch + 1]
+    xm     = ch + 0.5
+    ax1b.annotate('', xy=(xm, y1 - 8), xytext=(xm, y0 + 8),
+                  arrowprops=dict(arrowstyle='<->', color='dimgray', lw=1.1))
+    ax1b.text(xm + 0.08, (y0 + y1) / 2, f'Δψ\n={psi_deg:.0f}°',
+              ha='left', va='center', fontsize=6.5, color='dimgray')
+
+ax1b.set_ylabel("Phase (°)", fontsize=9)
+ax1b.set_xlabel("Antenna Element", fontsize=9)
+ax1b.set_xlim(-0.6, 3.9)
+ax1b.set_ylim(-25, phase_unwrap_deg[-1] + 60)
+ax1b.set_xticks(el_pos)
+ax1b.set_xticklabels([f'El {i}' for i in range(n_el)], fontsize=8)
+ax1b.legend(fontsize=7, loc='upper left')
+ax1b.grid(True, alpha=0.3, axis='y')
 
 # ── Panel ②: MUSIC spectrum ────────────────────────────────────────────
 #   Peaks at 0° (GPS) and 45° (jammer) found by eigendecomposing the
@@ -310,10 +425,10 @@ ax4.grid(True, alpha=0.3)
 
 # ── Corner badges for each panel ───────────────────────────────────────
 for ax, badge, color in [
-    (ax1, '①', 'steelblue'),
-    (ax2, '②', 'steelblue'),
-    (ax3, '③', 'steelblue'),
-    (ax4, '④★', 'darkred'),
+    (ax1a, '①', 'steelblue'),
+    (ax2,  '②', 'steelblue'),
+    (ax3,  '③', 'steelblue'),
+    (ax4,  '④★', 'darkred'),
 ]:
     ax.text(0.015, 0.975, badge,
             transform=ax.transAxes,
