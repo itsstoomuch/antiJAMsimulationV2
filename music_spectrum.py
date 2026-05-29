@@ -27,7 +27,7 @@ Scenario (from generate_array_data.py)
 ---------------------------------------
   2 jammers:  az = +30.96° (NE), +165.96° (NW)
   Array:      2×2 URA, half-wavelength spacing in X and Y
-  n_signals = 2  →  noise subspace has 2 eigenvectors
+  n_signals = 3  →  noise subspace has 2 eigenvectors
 
 Input  : array_data.npy    (written by generate_array_data.py)
 Output : music_spectrum.png
@@ -59,12 +59,12 @@ def find_top_peaks(spectrum_db, angles_deg, n_signals, min_sep_deg=25):
 
 
 # True jammer azimuths (degrees), derived from 3D geometry in generate_array_data.py
-TRUE_AZIMUTHS = np.array([30.96, 165.96])
+TRUE_AZIMUTHS = np.array([30.96, 165.96, -71.57])
 
 
 def music_spectrum(
     data_file:  str        = "array_data.npy",
-    n_signals:  int        = 2,                               # two jammers
+    n_signals:  int        = 3,                               # three jammers
     f_carrier:  float      = 1575.42e6,                       # GPS L1, Hz
     theta_scan: np.ndarray = np.linspace(-180, 180, 7201),    # full 360°, 0.05° resolution
     save_fig:   str        = "music_spectrum.png",
@@ -189,7 +189,7 @@ def music_spectrum(
     print("=" * 60)
     print(f"  Array elements        : {n_elements}  (2×2 URA)")
     print(f"  Snapshots             : {n_samples}")
-    print(f"  n_signals             : {n_signals}  (two jammers)")
+    print(f"  n_signals             : {n_signals}  (three jammers)")
     print(f"  Noise subspace dim    : {n_noise}")
     print()
     print(f"  Eigenvalues (descending):")
@@ -218,7 +218,7 @@ def music_spectrum(
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
     fig.suptitle(
-        "MUSIC Direction-of-Arrival  |  2×2 URA, GPS L1 (1575.42 MHz)  |  3 Jammers",
+        "MUSIC Direction-of-Arrival  |  2×2 URA, GPS L1 (1575.42 MHz)  |  2 Jammers",
         fontsize=13, fontweight='bold'
     )
 
@@ -227,8 +227,7 @@ def music_spectrum(
     ax1.plot(theta_scan, spectrum_db,
              color='royalblue', linewidth=1.2, zorder=3)
 
-    # Colour cycle for the three jammers
-    jammer_colors = ['tomato', 'darkorange', 'mediumseagreen']
+    jammer_colors = ['tomato', 'darkorange', 'limegreen']
 
     # True azimuth vertical lines
     for k, az in enumerate(true_sorted):
@@ -308,7 +307,7 @@ def music_spectrum(
     sig_patch   = mpatches.Patch(color='royalblue',
                                  label=f'Signal eigenvectors ({n_signals} jammers)')
     noise_patch = mpatches.Patch(color='tomato',
-                                 label=f'Noise eigenvector ({n_noise})')
+                                 label=f'Noise eigenvectors ({n_noise})')
     noise_line  = Line2D([0], [0], color='gray', linestyle=':', lw=1.5,
                          label=f'Noise floor = {noise_floor:.2e}')
     ax2.legend(handles=[sig_patch, noise_patch, noise_line], fontsize=9)

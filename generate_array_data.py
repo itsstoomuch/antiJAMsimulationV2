@@ -90,6 +90,7 @@ def generate_array_data(
     gps_pos     = np.array([0.0,    0.0,    20_200_000.0], dtype=float)
     jammer1_pos = np.array([ 500.0,  300.0,  0.0],         dtype=float)
     jammer2_pos = np.array([-800.0,  200.0,  0.0],         dtype=float)
+    jammer3_pos = np.array([ 200.0, -600.0, 50.0],         dtype=float)
 
     # =========================================================================
     # 3. GEOMETRY: AZIMUTH, ELEVATION, DISTANCE  (from drone to each source)
@@ -113,6 +114,7 @@ def generate_array_data(
     az_gps,  el_gps,  dist_gps,  uhat_gps  = compute_geometry(gps_pos,     drone_pos)
     az_jam1, el_jam1, dist_jam1, uhat_jam1 = compute_geometry(jammer1_pos, drone_pos)
     az_jam2, el_jam2, dist_jam2, uhat_jam2 = compute_geometry(jammer2_pos, drone_pos)
+    az_jam3, el_jam3, dist_jam3, uhat_jam3 = compute_geometry(jammer3_pos, drone_pos)
 
     # =========================================================================
     # 4. 2×2 UNIFORM RECTANGULAR ARRAY  (URA) ELEMENT POSITIONS
@@ -178,6 +180,7 @@ def generate_array_data(
     a_gps  = steering_vector(uhat_gps,  el_gps)
     a_jam1 = steering_vector(uhat_jam1, el_jam1)
     a_jam2 = steering_vector(uhat_jam2, el_jam2)
+    a_jam3 = steering_vector(uhat_jam3, el_jam3)
 
     # =========================================================================
     # 7. FREE-SPACE PATH LOSS  (amplitude factor)
@@ -204,6 +207,7 @@ def generate_array_data(
     amp_gps  = np.sqrt(P_gps_tx) * path_loss_amplitude(dist_gps,  f0)
     amp_jam1 = np.sqrt(P_jam_tx) * path_loss_amplitude(dist_jam1, f0)
     amp_jam2 = np.sqrt(P_jam_tx) * path_loss_amplitude(dist_jam2, f0)
+    amp_jam3 = np.sqrt(P_jam_tx) * path_loss_amplitude(dist_jam3, f0)
 
     def to_dBW(amplitude: float) -> float:
         """Convert amplitude to received power in dBW  (P = A², then 10·log10)."""
@@ -242,6 +246,7 @@ def generate_array_data(
         cw = np.exp(1j * 2 * np.pi * f_if * t)
         s_jam1 = _chips() * cw
         s_jam2 = _chips() * cw
+        s_jam3 = _chips() * cw
 
     elif jammer_type == 'FMCW':
         # Linear chirp sweeps B = 10 MHz in T = 1 ms, spread across bandwidth.
@@ -251,6 +256,7 @@ def generate_array_data(
         chirp = np.exp(1j * 2 * np.pi * (f_if + (B / (2 * T)) * t) * t)
         s_jam1 = _chips() * chirp
         s_jam2 = _chips() * chirp
+        s_jam3 = _chips() * chirp
 
     elif jammer_type == 'Barrage':
         # Three independent bandpass noise realizations — each jammer transmits
@@ -268,6 +274,7 @@ def generate_array_data(
 
         s_jam1 = _barrage()
         s_jam2 = _barrage()
+        s_jam3 = _barrage()
 
     else:
         raise ValueError(
@@ -284,6 +291,7 @@ def generate_array_data(
     X  = np.outer(a_gps,  amp_gps  * s_gps)
     X += np.outer(a_jam1, amp_jam1 * s_jam1)
     X += np.outer(a_jam2, amp_jam2 * s_jam2)
+    X += np.outer(a_jam3, amp_jam3 * s_jam3)
 
     # =========================================================================
     # 11. ADDITIVE WHITE GAUSSIAN NOISE  (thermal noise floor)
