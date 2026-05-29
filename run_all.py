@@ -1,462 +1,360 @@
 """
-run_all.py
+run_all.py — COGNAV-4 master pipeline.
 
-Master script: executes the complete hybrid analog-digital GPS anti-jam
-simulation pipeline and assembles all results into a single publication figure.
-
-Pipeline (in order)
--------------------
-  ① generate_array_data  → 4-channel synthetic IQ data
-  ② music_spectrum        → MUSIC DOA estimation (locates jammer at 45°)
-  ③ mvdr_beamformer       → MVDR null steering (72 dB null at 45°)
-  ④ hybrid_sim            → SNR vs jammer power sweep (the novel result)
-  ★  publication_figure   → all four panels combined into one figure
-
-Each step saves its own individual PNG.  The final combined figure
-'publication_figure.png' is suitable for a research paper or report.
-
-Usage
------
-  python run_all.py
+Runs all four simulation modules in sequence and generates one
+publication-quality 4-panel figure saved as publication_figure.png.
 """
 
-# Must call matplotlib.use() before any pyplot import (including those
-# triggered by importing the sub-modules).  'Agg' is a non-interactive
-# backend — plt.show() becomes a no-op, letting the script run headless.
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')   # must be before any other matplotlib import
 
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
-import time
-
-# ======================================================================
-# IMPORT PIPELINE MODULES
-# ======================================================================
 
 from generate_array_data import generate_array_data
-from music_spectrum       import music_spectrum
-from mvdr_beamformer      import mvdr_beamformer
-from hybrid_sim           import hybrid_sim
+from music_spectrum      import music_spectrum, find_top_peaks
+from mvdr_beamformer     import mvdr_beamformer
+from hybrid_sim          import hybrid_sim
 
-# ======================================================================
-# RUN EACH STAGE IN ORDER
-# ======================================================================
 
-print()
-print("╔══════════════════════════════════════════════════════════╗")
-print("║   Hybrid Analog-Digital GPS Anti-Jam Simulation          ║")
-print("║   4-Element ULA  ·  GPS L1 1575.42 MHz                   ║")
-print("╚══════════════════════════════════════════════════════════╝")
+# ── Physical constants shared across subplots ────────────────────────────────
+C         = 3e8
+F_CARRIER = 1575.42e6
+LAM       = C / F_CARRIER
+D         = LAM / 2
 
-t_pipeline_start = time.time()
+ELEM_POS = np.array([[0, 0, 0], [D, 0, 0], [0, D, 0], [D, D, 0]], dtype=float)
 
-# ── Stage ①: Generate synthetic 4-channel IQ array data ───────────────
-print("\n── ① generate_array_data ──────────────────────────────────")
-t = time.time()
-X = generate_array_data()          # returns (4, 1000) complex IQ matrix
-plt.close('all')                   # discard individual figure
-print(f"   ✓  {time.time() - t:.2f} s")
+# True jammer azimuths — J1, J2, J3 — from 3D geometry in generate_array_data.py
+TRUE_AZ = np.array([30.96, 165.96, -71.57])
+JCOL    = ['tomato', 'darkorange', 'mediumpurple']
 
-# ── Stage ②: MUSIC direction-of-arrival estimation ────────────────────
-print("\n── ② music_spectrum ───────────────────────────────────────")
-t = time.time()
-theta_scan_music = np.linspace(-90, 90, 3601)
-spec_db = music_spectrum(theta_scan=theta_scan_music)   # returns dB spectrum
+
+def _sv(az_deg: float) -> np.ndarray:
+    """2×2 URA steering vector at elevation = 0°."""
+    az = np.deg2rad(az_deg)
+    u  = np.array([np.cos(az), np.sin(az), 0.0])
+    return np.exp(1j * (2 * np.pi / LAM) * (ELEM_POS @ u))
+
+
+def _sv_matrix(az_arr: np.ndarray) -> np.ndarray:
+    """Vectorised steering matrix, shape (4, len(az_arr))."""
+    az  = np.deg2rad(az_arr)
+    u   = np.vstack([np.cos(az), np.sin(az), np.zeros_like(az)])  # (3, N)
+    phi = (2 * np.pi / LAM) * (ELEM_POS @ u)                      # (4, N)
+    return np.exp(1j * phi)
+
+
+def _first_fail(sinr_arr: np.ndarray, jam_db: np.ndarray):
+    m = sinr_arr < 0.0
+    return float(jam_db[np.argmax(m)]) if m.any() else None
+
+
+t_start = time.time()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 1 — Generate scene
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n" + "─" * 56)
+print("  STEP 1 — Generating array data …")
+print("─" * 56)
+X = generate_array_data()
 plt.close('all')
-print(f"   ✓  {time.time() - t:.2f} s")
 
-# ── Stage ③: MVDR beamformer ───────────────────────────────────────────
-print("\n── ③ mvdr_beamformer ──────────────────────────────────────")
-t = time.time()
-w = mvdr_beamformer()              # returns (4,) complex weight vector
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 2 — MUSIC DoA estimation
+# ─────────────────────────────────────────────────────────────────────────────
+print("─" * 56)
+print("  STEP 2 — Running MUSIC algorithm …")
+print("─" * 56)
+theta_scan    = np.linspace(-180, 180, 7201)
+music_results = music_spectrum(theta_scan=theta_scan)
 plt.close('all')
-print(f"   ✓  {time.time() - t:.2f} s")
 
-# ── Stage ④: Hybrid analog-digital simulation ─────────────────────────
-print("\n── ④ hybrid_sim ───────────────────────────────────────────")
-t = time.time()
-results = hybrid_sim()             # returns dict: jam_db, ideal, digital, hybrid
+# Re-extract detected peak angles from the returned pseudospectrum
+peaks_idx   = find_top_peaks(music_results, theta_scan, n_signals=3, min_sep_deg=25)
+peak_angles = theta_scan[peaks_idx]
+
+# Nearest-neighbour match: each true jammer az → closest detected peak
+detected   = np.array([
+    peak_angles[np.argmin(np.abs(peak_angles - az))] for az in TRUE_AZ
+])
+doa_errors = detected - TRUE_AZ
+max_error  = float(np.max(np.abs(doa_errors)))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 3 — MVDR beamformer
+# ─────────────────────────────────────────────────────────────────────────────
+print("─" * 56)
+print("  STEP 3 — Running MVDR beamformer …")
+print("─" * 56)
+w = mvdr_beamformer()
 plt.close('all')
-print(f"   ✓  {time.time() - t:.2f} s")
 
-t_pipeline = time.time() - t_pipeline_start
-print(f"\nAll stages complete in {t_pipeline:.1f} s\n")
-print("Assembling publication figure...")
+# Recompute null depths from returned weight vector
+a_gps_sv    = _sv(0.0)
+a_jams_sv   = [_sv(az) for az in TRUE_AZ]
+gps_gain_db = 10 * np.log10(abs(w.conj() @ a_gps_sv) ** 2 + 1e-30)
+jam_gains   = [10 * np.log10(abs(w.conj() @ aj) ** 2 + 1e-30) for aj in a_jams_sv]
+null_depths = [gps_gain_db - g for g in jam_gains]
 
-# ======================================================================
-# PHYSICS HELPERS  (reused across figure panels)
-# ======================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 4 — Hybrid simulation
+# ─────────────────────────────────────────────────────────────────────────────
+print("─" * 56)
+print("  STEP 4 — Running hybrid simulation …")
+print("─" * 56)
+hybrid_results = hybrid_sim()
+plt.close('all')
 
-c          = 3e8
-f_carrier  = 1575.42e6
-lam        = c / f_carrier          # GPS L1 wavelength ≈ 0.190 m
-d          = lam / 2                # half-wavelength spacing
-n_el       = X.shape[0]             # 4 elements
-fs         = 10e6                   # sample rate
+jam_db_range = hybrid_results['jam_db']
+sinr_ideal   = hybrid_results['ideal']
+sinr_digital = hybrid_results['digital']
+sinr_hybrid  = hybrid_results['hybrid']
 
-def steering_vector(theta_deg: float) -> np.ndarray:
-    """ULA steering vector — identical formula used in every module."""
-    theta = np.deg2rad(theta_deg)
-    m     = np.arange(n_el)
-    return np.exp(1j * (2 * np.pi / lam) * d * m * np.sin(theta))
+fail_dig       = _first_fail(sinr_digital, jam_db_range)
+fail_hyb       = _first_fail(sinr_hybrid,  jam_db_range)
+idx30          = int(np.argmin(np.abs(jam_db_range - 30.0)))
+improvement_30 = float(sinr_hybrid[idx30] - sinr_digital[idx30])
+extended_range = (fail_hyb - fail_dig) if (fail_dig is not None and fail_hyb is not None) else None
 
-theta_scan = np.linspace(-90, 90, 3601)   # shared scan grid for panels 2 & 3
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 5 — Console summary
+# ─────────────────────────────────────────────────────────────────────────────
+fd_str = f"{fail_dig:.0f} dB" if fail_dig is not None else ">50 dB"
+fh_str = f"{fail_hyb:.0f} dB" if fail_hyb is not None else ">50 dB"
+er_str = f"{extended_range:.0f} dB" if extended_range is not None else "N/A"
+er_pass = extended_range is not None and extended_range > 10
 
-# ======================================================================
-# COMBINED PUBLICATION FIGURE  —  2 × 2 layout
-# ======================================================================
-#
-#   ┌──────────────────────┬──────────────────────┐
-#   │ ① Raw IQ data        │ ② MUSIC spectrum      │
-#   │  time domain          │  DOA estimation       │
-#   ├──────────────────────┼──────────────────────┤
-#   │ ③ MVDR beampattern   │ ④ Hybrid SINR  ★      │
-#   │  null steering        │  the novel result     │
-#   └──────────────────────┴──────────────────────┘
-
-fig = plt.figure(figsize=(16, 10))
-
-fig.suptitle(
-    "Hybrid Analog-Digital GPS Anti-Jam  |  4-Element ULA, GPS L1 (1575.42 MHz)\n"
-    "GPS: 0° (broadside)  ·  CW Jammer: 45°, 30 dB above GPS  "
-    "·  ADC ±5  ·  90% analog pre-cancel",
-    fontsize=11.5, fontweight='bold', y=0.99
-)
-
-gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.40, wspace=0.30)
-# Split top-left cell into two stacked subplots (power spectrum + phase)
-gs_fft = gridspec.GridSpecFromSubplotSpec(
-    2, 1, subplot_spec=gs[0, 0], hspace=0.55, height_ratios=[1.6, 1.0]
-)
-ax1a = fig.add_subplot(gs_fft[0])  # ① top:    power spectrum (4 elements)
-ax1b = fig.add_subplot(gs_fft[1])  # ① bottom: phase at jammer bin
-ax2  = fig.add_subplot(gs[0, 1])   # ② MUSIC
-ax3  = fig.add_subplot(gs[1, 0])   # ③ MVDR beampattern
-ax4  = fig.add_subplot(gs[1, 1])   # ④ hybrid SINR  ★
-
-# ── Panel ①: FFT Power + Phase Spectrum — Jammer Spatial Fingerprint ──
-#
-#   Physical insight:
-#     A CW jammer at 45° hits all 4 antennas at the same frequency and the
-#     same power — but each antenna is spatially offset, so the jammer
-#     arrives with a progressively shifted phase.  The FFT reveals this:
-#     all 4 power spectra overlay identically (same spike height), while
-#     the phase at the jammer bin increases by ψ = 127° per element.
-#     MUSIC and MVDR exploit exactly this phase gradient.
-#
-#   Zero-padding 1000 → 10000 gives 1 kHz bin spacing, putting the
-#   jammer (f_if = 1 kHz) at an exact FFT bin for a clean spike.
-
-n_fft     = 10000                                           # zero-padded length
-freq_axis = np.fft.fftshift(np.fft.fftfreq(n_fft, 1/fs)) / 1e6   # MHz
-
-# Jammer bin: f_if = 1000 Hz → bin index = f_if * n_fft / fs = 1 (exact)
-# After fftshift the DC bin is at n_fft//2, so jammer is at n_fft//2 + 1
-f_if_hz   = 1e3
-jam_bin   = n_fft // 2 + int(round(f_if_hz * n_fft / fs))  # = 5001
-
-# Theoretical inter-element phase step for jammer at 45°
-psi_rad   = np.pi * np.sin(np.deg2rad(45.0))               # = 2.221 rad
-psi_deg   = np.rad2deg(psi_rad)                            # = 127.28°
-
-el_colors = ['tomato', 'royalblue', 'limegreen', 'darkorange']
-
-# Compute zero-padded FFT for all 4 elements
-spectra   = [np.fft.fftshift(np.fft.fft(X[ch], n=n_fft)) for ch in range(n_el)]
-
-# Measure phase at jammer bin, relative to element 0
-raw_phases = np.array([np.angle(spectra[ch][jam_bin]) for ch in range(n_el)])
-phase_rel  = (raw_phases - raw_phases[0]) % (2 * np.pi)    # wrapped [0, 2π)
-phase_rel_deg = np.rad2deg(phase_rel)                       # wrapped degrees
-
-# Unwrap: successive difference should be ≈ 127° per element step
-phase_unwrap_deg = np.array([0.0,
-                              phase_rel_deg[1],
-                              phase_rel_deg[2],
-                              phase_rel_deg[2] + phase_rel_deg[1]])
-phase_wrap_deg = phase_unwrap_deg % 360.0                   # for bar annotations
-
-# ── Top sub-panel: Power Spectrum (stacked with vertical offsets) ──────
-#
-#   Without offsets all four power spectra land on top of one another
-#   (identical CW power at every antenna) — unreadable.  Adding -15 dB
-#   per element separates them vertically while preserving the key
-#   message: all spikes have the SAME height relative to their own
-#   noise floor, only the PHASE differs.
-
-n_samples     = X.shape[1]
-freq_mask     = (freq_axis >= -5.0) & (freq_axis <= 5.0)
-stack_offsets = np.array([0, -15, -30, -45])               # dB, element 0 on top
-phase_labels  = ['0°', '127°', '255°', '382°']             # unwrapped phases
-
-# Un-offset spike level (same for every element — this is the key insight)
-spike_pwr = 20 * np.log10(np.abs(spectra[0][jam_bin]) / n_samples + 1e-12)
-
-for ch in range(n_el):
-    offset = stack_offsets[ch]
-    pwr_db = (20 * np.log10(np.abs(spectra[ch][freq_mask]) / n_samples + 1e-12)
-              + offset)
-    ax1a.plot(freq_axis[freq_mask], pwr_db,
-              color=el_colors[ch], linewidth=0.9, alpha=0.92,
-              label=f'El {ch}  φ={phase_labels[ch]}')
-
-    # Arrow from annotation text (right side) to the spike tip
-    spike_y = spike_pwr + offset
-    ax1a.annotate(f'El {ch}: φ={phase_labels[ch]}',
-                  xy=(0.002, spike_y),
-                  xytext=(1.55, spike_y - 2),
-                  fontsize=7.5, color=el_colors[ch], fontweight='bold',
-                  arrowprops=dict(arrowstyle='->', color=el_colors[ch], lw=0.9))
-
-# Vertical reference at jammer frequency
-ax1a.axvline(0.001, color='black', linestyle='--', linewidth=1.3, alpha=0.65,
-             label='Jammer freq (f_if ≈ 0 MHz)')
-
-# Explanation note (bottom-right corner)
-ax1a.text(0.98, 0.03, 'Traces offset −15 dB each for clarity',
-          transform=ax1a.transAxes, ha='right', va='bottom',
-          fontsize=6.8, color='dimgray', style='italic')
-
-ax1a.set_ylabel("Power (dB)", fontsize=9)
-ax1a.set_xlim(-5, 5)
-ax1a.set_ylim(-60, spike_pwr + 15)
-ax1a.set_xticks(np.arange(-5, 6, 1))
-ax1a.tick_params(labelbottom=False)                        # share x-axis with ax1b
-ax1a.set_title("FFT of All 4 Antenna Channels — Jammer Spatial Fingerprint\n"
-               "Same power at all antennas, different phase = spatial fingerprint",
-               fontsize=9, pad=4)
-ax1a.legend(fontsize=7, loc='lower right', ncol=2,
-            handlelength=1.2, columnspacing=0.8)
-ax1a.grid(True, alpha=0.3)
-
-# ── Bottom sub-panel: Phase at Jammer Bin ─────────────────────────────
-#   Stem/bar plot showing the 127° linear progression across elements.
-#   Element 3 is plotted at its unwrapped value (381°) to show linearity,
-#   with its wrapped value (21°) annotated in parentheses.
-
-el_pos  = np.arange(n_el)                                  # [0, 1, 2, 3]
-
-# Draw coloured vertical stems manually (more control than plt.stem)
-for ch in range(n_el):
-    ax1b.plot([ch, ch], [0, phase_unwrap_deg[ch]],
-              color=el_colors[ch], linewidth=3.0, solid_capstyle='round')
-    ax1b.plot(ch, phase_unwrap_deg[ch], 'o',
-              color=el_colors[ch], markersize=9, zorder=5,
-              markeredgecolor='black', markeredgewidth=0.5)
-
-# Overlay the linear-phase fit line (shows ideal 127° progression)
-ax1b.plot(el_pos, el_pos * psi_deg, color='gray', linestyle='--',
-          linewidth=1.0, alpha=0.6, zorder=2, label=f'Δψ = {psi_deg:.0f}°/element')
-
-# 360° wrap reference line
-ax1b.axhline(360, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
-ax1b.text(3.3, 363, '360°\n(wrap)', fontsize=6.5, va='bottom', color='gray')
-
-# Annotate each stem with its phase value
-annot = [(0, '0°'), (psi_deg, f'{psi_deg:.0f}°'),
-         (2*psi_deg, f'{2*psi_deg:.0f}°'),
-         (3*psi_deg, f'{3*psi_deg:.0f}°\n(={3*psi_deg%360:.0f}° wrapped)')]
-for ch, (y, txt) in enumerate(annot):
-    yoff = 14 if ch < 3 else 14
-    ax1b.text(ch, y + yoff, txt, ha='center', va='bottom',
-              fontsize=7.5, fontweight='bold', color=el_colors[ch])
-
-# Annotate the Δψ = 127° inter-element steps with double-headed arrows
-for ch in range(3):
-    y0, y1 = phase_unwrap_deg[ch], phase_unwrap_deg[ch + 1]
-    xm     = ch + 0.5
-    ax1b.annotate('', xy=(xm, y1 - 8), xytext=(xm, y0 + 8),
-                  arrowprops=dict(arrowstyle='<->', color='dimgray', lw=1.1))
-    ax1b.text(xm + 0.08, (y0 + y1) / 2, f'Δψ\n={psi_deg:.0f}°',
-              ha='left', va='center', fontsize=6.5, color='dimgray')
-
-ax1b.set_ylabel("Phase (°)", fontsize=9)
-ax1b.set_xlabel("Antenna Element", fontsize=9)
-ax1b.set_xlim(-0.6, 3.9)
-ax1b.set_ylim(-25, phase_unwrap_deg[-1] + 60)
-ax1b.set_xticks(el_pos)
-ax1b.set_xticklabels([f'El {i}' for i in range(n_el)], fontsize=8)
-ax1b.legend(fontsize=7, loc='upper left')
-ax1b.grid(True, alpha=0.3, axis='y')
-
-# ── Panel ②: MUSIC spectrum ────────────────────────────────────────────
-#   Peaks at 0° (GPS) and 45° (jammer) found by eigendecomposing the
-#   4×4 covariance matrix and scanning the MUSIC pseudospectrum.
-
-ax2.plot(theta_scan_music, spec_db, color='royalblue', linewidth=1.5, zorder=3)
-ax2.axvline(0,  color='limegreen', linestyle='--', linewidth=2.0,
-            label='GPS truth (0°)', zorder=4)
-ax2.axvline(45, color='tomato',    linestyle='--', linewidth=2.0,
-            label='Jammer truth (45°)', zorder=4)
-
-# Shade under peaks
-for ang, col in [(0, 'limegreen'), (45, 'darkorange')]:
-    mask = np.abs(theta_scan_music - ang) < 6
-    ax2.fill_between(theta_scan_music[mask], -50, spec_db[mask],
-                     alpha=0.18, color=col)
-
-# Annotate detected angles
-for ang, label, col, xoff in [(0, 'GPS\n0.0°', 'limegreen', +6),
-                               (45, 'Jammer\n45.0°', 'tomato', +6)]:
-    idx = np.argmin(np.abs(theta_scan_music - ang))
-    peak_val = spec_db[idx]
-    ax2.annotate(label,
-                 xy=(ang, peak_val),
-                 xytext=(ang + xoff, peak_val - 12),
-                 fontsize=8, color=col, fontweight='bold',
-                 arrowprops=dict(arrowstyle='->', color=col, lw=1.0))
-
-legend_handles = [
-    Line2D([0], [0], color='royalblue',  lw=1.5,   label='MUSIC pseudospectrum'),
-    Line2D([0], [0], color='limegreen',  lw=2.0, linestyle='--', label='GPS truth (0°)'),
-    Line2D([0], [0], color='tomato',     lw=2.0, linestyle='--', label='Jammer truth (45°)'),
-]
-ax2.legend(handles=legend_handles, fontsize=8, loc='lower right')
-ax2.set_xlabel("Angle of Arrival (degrees)", fontsize=11)
-ax2.set_ylabel("Pseudospectrum (dB)", fontsize=11)
-ax2.set_title("② MUSIC Direction-of-Arrival Estimation\n"
-              "Peaks locate GPS (0°) and jammer (45°) to within 0.25°",
-              fontsize=10)
-ax2.set_xlim(-90, 90)
-ax2.set_ylim(-50, 5)
-ax2.set_xticks(np.arange(-90, 91, 30))
-ax2.grid(True, alpha=0.3)
-
-# ── Panel ③: MVDR beampattern ──────────────────────────────────────────
-#   B(θ) = |w^H a(θ)|²  — recomputed from the weight vector returned
-#   by mvdr_beamformer().  GPS passband = 0 dB by the MVDR constraint.
-
-beampattern    = np.array([abs(w.conj() @ steering_vector(t))**2 for t in theta_scan])
-beampattern_db = 10 * np.log10(beampattern + 1e-20)
-
-null_idx   = np.argmin(np.abs(theta_scan - 45))
-null_depth = 0.0 - beampattern_db[null_idx]    # dB below GPS passband
-
-ax3.plot(theta_scan, beampattern_db, color='royalblue', linewidth=1.8,
-         zorder=3, label='MVDR beampattern  B(θ) = |w^H a(θ)|²')
-ax3.axvline(0,  color='limegreen', linestyle='--', linewidth=2.0,
-            label='GPS passband (0 dB)', zorder=4)
-ax3.axvline(45, color='tomato',    linestyle='--', linewidth=2.0,
-            label=f'Jammer null (45°)', zorder=4)
-ax3.axhline(0, color='gray', linestyle=':', linewidth=0.8, alpha=0.6)
-
-# Shade null region
-null_mask = (theta_scan > 38) & (theta_scan < 52)
-ax3.fill_between(theta_scan[null_mask], -80, beampattern_db[null_mask],
-                 alpha=0.18, color='tomato')
-
-# Null depth annotation
-ax3.annotate(f'Null depth\n{null_depth:.0f} dB',
-             xy=(45, beampattern_db[null_idx]),
-             xytext=(58, beampattern_db[null_idx] + 22),
-             fontsize=8.5, color='tomato', fontweight='bold',
-             arrowprops=dict(arrowstyle='->', color='tomato', lw=1.2))
-
-ax3.legend(fontsize=8, loc='lower right')
-ax3.set_xlabel("Angle of Arrival (degrees)", fontsize=11)
-ax3.set_ylabel("Beamformer Gain (dB)", fontsize=11)
-ax3.set_title(f"③ MVDR Null Steering\n"
-              f"GPS: 0 dB passband  ·  Jammer: {null_depth:.0f} dB null",
-              fontsize=10)
-ax3.set_xlim(-90, 90)
-ax3.set_ylim(-80, 12)
-ax3.set_xticks(np.arange(-90, 91, 30))
-ax3.grid(True, alpha=0.3)
-
-# ── Panel ④: Hybrid SINR vs Jammer Power  ★ THE KEY RESULT ────────────
-#   The three curves show:
-#   - Green (Ideal): theoretical ceiling — MVDR with no ADC limit
-#   - Red   (Digital): degrades at ~14 dB when jammer clips the ADC
-#   - Blue  (Hybrid): analog pre-cancel moves the cliff 20 dB further right
-
-jam_db   = results['jam_db']
-s_ideal  = results['ideal']
-s_dig    = results['digital']
-s_hyb    = results['hybrid']
-
-ax4.plot(jam_db, s_ideal, color='limegreen', linewidth=2.0,
-         label='Ideal MVDR (no ADC limit)', zorder=4)
-ax4.plot(jam_db, s_dig,   color='tomato',    linewidth=2.0,
-         label='Pure digital MVDR  (ADC ±5)', zorder=3)
-ax4.plot(jam_db, s_hyb,   color='royalblue', linewidth=2.5,
-         label='Hybrid  (90% analog cancel + digital MVDR)  ★', zorder=5)
-
-ax4.axhline(0, color='black', linestyle=':', linewidth=1.0, alpha=0.5,
-            label='SINR = 0 dB threshold')
-
-# Crossover points (where SINR first drops below 0 dB)
-threshold = 0.0
-dig_cross = (jam_db[np.argmax(s_dig < threshold)]
-             if (s_dig < threshold).any() else jam_db[-1])
-hyb_cross = (jam_db[np.argmax(s_hyb < threshold)]
-             if (s_hyb < threshold).any() else jam_db[-1])
-
-ax4.axvline(dig_cross, color='tomato',    linestyle='--', linewidth=1.4, alpha=0.75,
-            label=f'Digital fails: {dig_cross:.0f} dB')
-ax4.axvline(hyb_cross, color='royalblue', linestyle='--', linewidth=1.4, alpha=0.75,
-            label=f'Hybrid fails:  {hyb_cross:.0f} dB')
-
-# Shade the hybrid advantage window and label it
-if hyb_cross > dig_cross:
-    ax4.axvspan(dig_cross, hyb_cross, alpha=0.08, color='royalblue')
-    mid = (dig_cross + hyb_cross) / 2
-    ax4.text(mid, 2.5,
-             f'+{hyb_cross - dig_cross:.0f} dB\nheadroom',
-             ha='center', va='bottom', fontsize=10,
-             color='royalblue', fontweight='bold')
-
-# Mark the designed operating point (30 dB jammer)
-op_idx = np.argmin(np.abs(jam_db - 30))
-ax4.scatter([30], [s_hyb[op_idx]], color='royalblue', s=60, zorder=6,
-            marker='*', label=f'Design point (30 dB): hybrid={s_hyb[op_idx]:.1f} dB')
-ax4.scatter([30], [s_dig[op_idx]], color='tomato',    s=60, zorder=6, marker='*')
-
-ax4.set_xlabel("Jammer Power (dB above GPS)", fontsize=11)
-ax4.set_ylabel("Output SINR (dB)", fontsize=11)
-ax4.set_title("④ Output SINR vs Jammer Power  ★ Novel Result\n"
-              "Hybrid extends ADC dynamic range by 20 dB",
-              fontsize=10)
-ax4.set_xlim(0, 50)
-ax4.legend(fontsize=7.5, loc='lower left')
-ax4.grid(True, alpha=0.3)
-
-# ── Corner badges for each panel ───────────────────────────────────────
-for ax, badge, color in [
-    (ax1a, '①', 'steelblue'),
-    (ax2,  '②', 'steelblue'),
-    (ax3,  '③', 'steelblue'),
-    (ax4,  '④★', 'darkred'),
-]:
-    ax.text(0.015, 0.975, badge,
-            transform=ax.transAxes,
-            fontsize=13, va='top', ha='left',
-            color=color, fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.15', fc='white', ec=color, lw=0.8, alpha=0.8))
-
-# ======================================================================
-# SAVE
-# ======================================================================
-
-output_file = 'publication_figure.png'
-plt.savefig(output_file, dpi=180, bbox_inches='tight')
-plt.show()
-
+SEP = "═" * 50
 print()
-print("╔══════════════════════════════════════════════════════════╗")
-print("║   PIPELINE COMPLETE                                       ║")
-print("╠══════════════════════════════════════════════════════════╣")
-print("║   Individual files                                        ║")
-print("║     array_data.npy        — raw IQ data                  ║")
-print("║     music_spectrum.png    — MUSIC DOA spectrum            ║")
-print("║     mvdr_beampattern.png  — MVDR beampattern + eigenvals  ║")
-print("║     mvdr_weights.npy      — complex weight vector         ║")
-print("║     hybrid_sim.png        — hybrid SINR sweep             ║")
-print("║   Combined figure                                         ║")
-print(f"║     {output_file:<52} ║")
-print("╠══════════════════════════════════════════════════════════╣")
-print(f"║   Total runtime: {t_pipeline:5.1f} s                                 ║")
-print("╚══════════════════════════════════════════════════════════╝")
+print(SEP)
+print("  COGNAV-4 SIMULATION — COMPLETE PIPELINE RESULTS")
+print(SEP)
+print(f"  Array         : 2x2 URA, 4 elements, d=9.52 cm")
+print(f"  Frequency     : GPS L1 1575.42 MHz")
+print(f"  Jammers       : 3 simultaneous CW")
 print()
+print(f"  SCENE GEOMETRY:")
+print(f"  Jammer 1 (CW) : [500,300,0]m    az=+30.96°  -81.8 dBW")
+print(f"  Jammer 2 (CW) : [-800,200,0]m   az=+165.96° -84.8 dBW")
+print(f"  Jammer 3 (CW) : [200,-600,50]m  az=-71.57°  -82.4 dBW")
+print()
+print(f"  MUSIC DoA RESULTS:")
+for k in range(3):
+    print(f"  Jammer {k+1} detected : {detected[k]:+.2f}° (error {doa_errors[k]:+.2f}°)")
+print()
+print(f"  MVDR NULL STEERING:")
+print(f"  Null at J1 (+30.96°)  : {null_depths[0]:.1f} dB")
+print(f"  Null at J2 (+165.96°) : {null_depths[1]:.1f} dB")
+print(f"  Null at J3 (-71.57°)  : {null_depths[2]:.1f} dB")
+print(f"  GPS passband gain     : {gps_gain_db:+.2f} dB")
+print()
+print(f"  HYBRID SYSTEM:")
+print(f"  Digital fails at   : {fd_str}")
+print(f"  Hybrid fails at    : {fh_str}")
+print(f"  Extended range     : {er_str}")
+print(f"  Improvement at 30dB: {improvement_30:.1f} dB")
+print()
+print(f"  COGNAV-4 TARGET COMPLIANCE:")
+print(f"  DoA accuracy < 1°   : {'PASS' if max_error < 1.0 else 'FAIL'} ({max_error:.2f}°)")
+print(f"  Null depth > 40 dB  : {'PASS' if min(null_depths) > 40 else 'FAIL'} ({min(null_depths):.0f} dB min)")
+print(f"  Hybrid range > 10 dB: {'PASS' if er_pass else 'FAIL'} ({er_str})")
+print(f"  GPS gain = 0 dB     : {'PASS' if abs(gps_gain_db) < 0.01 else 'FAIL'} ({gps_gain_db:+.2f} dB)")
+print(SEP)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 6 — Publication figure: 4 subplots, 14×9 in, dark style
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Beampattern B(θ) = |w^H a(θ)|² for subplot 2
+theta_bp   = np.linspace(-180, 180, 7201)
+A_bp       = _sv_matrix(theta_bp)           # (4, 7201)
+pattern    = np.abs(w.conj() @ A_bp) ** 2  # (7201,)
+pattern_db = 10 * np.log10(pattern + 1e-20)
+pattern_db = pattern_db - pattern_db.max()  # normalise: 0 dB at peak
+
+with plt.style.context('dark_background'):
+    fig = plt.figure(figsize=(14, 9))
+    fig.suptitle(
+        "COGNAV-4 Hybrid Analog-Digital Anti-Jamming\n"
+        "Pre-Hardware Simulation | 4-Element 2×2 URA | GPS L1",
+        fontsize=14, fontweight='bold', y=0.98,
+    )
+
+    gs = gridspec.GridSpec(2, 2, hspace=0.46, wspace=0.37,
+                           left=0.07, right=0.97, top=0.90, bottom=0.07)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[1, 0])
+    ax4 = fig.add_subplot(gs[1, 1])
+
+    # ── SP1: MUSIC spatial spectrum ───────────────────────────────────────────
+    ax1.plot(theta_scan, music_results, color='royalblue', lw=1.2, zorder=3)
+
+    for k, az in enumerate(TRUE_AZ):
+        ax1.axvline(az, color=JCOL[k], linestyle='--', lw=1.6, alpha=0.85, zorder=4)
+
+    for ang in peak_angles:
+        mask = np.abs(theta_scan - ang) < 4
+        ax1.fill_between(theta_scan[mask], -65, music_results[mask],
+                         alpha=0.22, color='royalblue', zorder=2)
+        i_p  = np.argmin(np.abs(theta_scan - ang))
+        y_pk = music_results[i_p]
+        dy   = -9 if ang > 100 else -6
+        ax1.annotate(f'{ang:.2f}°',
+                     xy=(ang, y_pk),
+                     xytext=(ang + 6, y_pk + dy),
+                     fontsize=8.5, color='cyan', fontweight='bold',
+                     arrowprops=dict(arrowstyle='->', color='cyan', lw=0.8))
+
+    h1 = [Line2D([0], [0], color='royalblue', lw=1.4, label='MUSIC spectrum')]
+    for k, az in enumerate(TRUE_AZ):
+        h1.append(Line2D([0], [0], color=JCOL[k], lw=1.5, linestyle='--',
+                         label=f'J{k+1} true {az:+.1f}°'))
+    ax1.legend(handles=h1, fontsize=7.5, loc='upper left')
+    ax1.set_xlabel("Azimuth (deg)", fontsize=10)
+    ax1.set_ylabel("Pseudospectrum (dB)", fontsize=10)
+    ax1.set_title("MUSIC DoA — 3 jammers detected", fontsize=11, fontweight='bold')
+    ax1.set_xlim(-180, 180)
+    ax1.set_ylim(-65, 3)
+    ax1.set_xticks(np.arange(-180, 181, 45))
+    ax1.grid(True, alpha=0.2)
+
+    # ── SP2: MVDR beam pattern ────────────────────────────────────────────────
+    ax2.plot(theta_bp, pattern_db, color='royalblue', lw=1.3, zorder=3)
+    ax2.axvline(0.0, color='limegreen', linestyle='--', lw=2.0, zorder=5)
+
+    # Fixed text positions inside [-80, 5] axes — arrows point down to the nulls
+    ann_text_pos = [
+        (30.96  + 20, -32),   # J1
+        (165.96 - 48, -45),   # J2 (shifted left to stay in frame)
+        (-71.57 + 20, -57),   # J3
+    ]
+    for k, (az, col) in enumerate(zip(TRUE_AZ, JCOL)):
+        ax2.axvline(az, color=col, linestyle=':', lw=1.8, alpha=0.9, zorder=4)
+        mask = np.abs(theta_bp - az) < 5
+        ax2.fill_between(theta_bp[mask], -80, pattern_db[mask], alpha=0.18, color=col)
+        i_p = np.argmin(np.abs(theta_bp - az))
+        ax2.annotate(f'{az:+.1f}°\n{null_depths[k]:.0f} dB',
+                     xy=(az, pattern_db[i_p]),
+                     xytext=ann_text_pos[k],
+                     fontsize=7.5, color=col, fontweight='bold',
+                     arrowprops=dict(arrowstyle='->', color=col, lw=0.8))
+
+    h2 = [Line2D([0], [0], color='royalblue', lw=1.4, label='MVDR pattern'),
+          Line2D([0], [0], color='limegreen', lw=2.0, linestyle='--', label='GPS (0°)')]
+    for k, (az, col) in enumerate(zip(TRUE_AZ, JCOL)):
+        h2.append(Line2D([0], [0], color=col, lw=1.8, linestyle=':',
+                         label=f'J{k+1} {null_depths[k]:.0f} dB null'))
+    ax2.legend(handles=h2, fontsize=7.5, loc='lower center', ncol=2)
+    ax2.set_xlabel("Azimuth (deg)", fontsize=10)
+    ax2.set_ylabel("Gain (dB)", fontsize=10)
+    ax2.set_title("MVDR null steering — 3 simultaneous nulls", fontsize=11, fontweight='bold')
+    ax2.set_xlim(-180, 180)
+    ax2.set_ylim(-80, 5)
+    ax2.set_xticks(np.arange(-180, 181, 45))
+    ax2.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.5)
+    ax2.grid(True, alpha=0.2)
+
+    # ── SP3: Hybrid SINR curve ────────────────────────────────────────────────
+    ax3.plot(jam_db_range, sinr_ideal,   color='limegreen',  lw=2.0,
+             label='Ideal MVDR (no ADC)')
+    ax3.plot(jam_db_range, sinr_digital, color='tomato',     lw=2.0,
+             label='Pure digital MVDR')
+    ax3.plot(jam_db_range, sinr_hybrid,  color='royalblue',  lw=2.0,
+             label='Hybrid (90% pre-cancel)')
+    ax3.axhline(0, color='white', linestyle=':', lw=1.0, alpha=0.7,
+                label='SINR = 0 dB')
+    ax3.fill_between(jam_db_range, sinr_digital, sinr_hybrid,
+                     where=(sinr_hybrid > sinr_digital),
+                     alpha=0.15, color='royalblue', label='Hybrid advantage')
+
+    ymin_s3 = max(min(sinr_digital.min(), sinr_hybrid.min()) - 5, -60)
+    ymax_s3 = min(sinr_ideal.max() + 5, 40)
+    ann_y   = ymin_s3 + 14   # text y safely inside axes
+
+    if fail_dig is not None:
+        ax3.axvline(fail_dig, color='tomato', linestyle='--', lw=1.3, alpha=0.8)
+        ax3.annotate(f'Digital\nfails\n@ {fail_dig:.0f} dB',
+                     xy=(fail_dig, 0),
+                     xytext=(fail_dig - 12, ann_y),
+                     fontsize=7.5, color='tomato', fontweight='bold',
+                     arrowprops=dict(arrowstyle='->', color='tomato', lw=0.9))
+    if fail_hyb is not None:
+        ax3.axvline(fail_hyb, color='royalblue', linestyle='--', lw=1.3, alpha=0.8)
+        ax3.annotate(f'Hybrid\nfails\n@ {fail_hyb:.0f} dB',
+                     xy=(fail_hyb, 0),
+                     xytext=(fail_hyb + 1.5, ann_y),
+                     fontsize=7.5, color='royalblue', fontweight='bold',
+                     arrowprops=dict(arrowstyle='->', color='royalblue', lw=0.9))
+
+    ax3.axvline(30, color='gray', linestyle=':', lw=1.0, alpha=0.7)
+    ax3.plot(30, sinr_hybrid[idx30], '*', markersize=14, color='yellow', zorder=7)
+    ax3.annotate(
+        f'30 dB design pt\nH:{sinr_hybrid[idx30]:+.0f} dB\nD:{sinr_digital[idx30]:+.0f} dB',
+        xy=(30, sinr_hybrid[idx30]),
+        xytext=(35, sinr_hybrid[idx30] - 4),
+        fontsize=7.5, color='yellow',
+        arrowprops=dict(arrowstyle='->', color='yellow', lw=0.9))
+
+    ax3.set_xlabel("Jammer Power (dB above GPS)", fontsize=10)
+    ax3.set_ylabel("Output SINR (dB)", fontsize=10)
+    ax3.set_title("Hybrid vs digital — extended dynamic range", fontsize=11, fontweight='bold')
+    ax3.set_xlim(0, 50)
+    ax3.set_ylim(ymin_s3, ymax_s3)
+    ax3.legend(fontsize=8, loc='upper right')
+    ax3.grid(True, alpha=0.2)
+
+    # ── SP4: Results summary text panel ──────────────────────────────────────
+    ax4.axis('off')
+
+    er_disp     = f"{extended_range:.0f} dB" if extended_range is not None else ">50 dB"
+    er_pass_str = "YES" if er_pass else "NO"
+    impr_pass   = "YES" if improvement_30 > 15 else "NO"
+    fd_disp     = f"{fail_dig:.0f} dB" if fail_dig is not None else ">50 dB"
+
+    table_rows = [
+        ("DoA accuracy",  "< 1.0°",  f"{max_error:.2f}°",        "YES" if max_error < 1.0    else "NO"),
+        ("Null depth J1", "> 40 dB", f"{null_depths[0]:.0f} dB", "YES" if null_depths[0] > 40 else "NO"),
+        ("Null depth J2", "> 40 dB", f"{null_depths[1]:.0f} dB", "YES" if null_depths[1] > 40 else "NO"),
+        ("Null depth J3", "> 40 dB", f"{null_depths[2]:.0f} dB", "YES" if null_depths[2] > 40 else "NO"),
+        ("GPS passband",  "0.00 dB", f"{gps_gain_db:+.2f} dB",   "YES" if abs(gps_gain_db) < 0.01 else "NO"),
+        ("Digital range", "—",       fd_disp,                     "—"),
+        ("Hybrid range",  "> 10 dB", er_disp,                     er_pass_str),
+        ("Improv.@30dB",  "> 15 dB", f"{improvement_30:.1f} dB",  impr_pass),
+    ]
+    hdr = "─" * 43
+    lines = [
+        "  COGNAV-4 SIMULATION SUMMARY",
+        f"  {hdr}",
+        f"  {'Parameter':<16}  {'Target':>8}  {'Result':>8}  {'Pass':>4}",
+        f"  {hdr}",
+    ]
+    for param, target, result, passed in table_rows:
+        lines.append(f"  {param:<16}  {target:>8}  {result:>8}  {passed:>4}")
+    lines += [
+        f"  {hdr}",
+        "  Array: 2×2 URA  |  GPS L1 1575.42 MHz",
+        "  Jammers: 3 CW from real coordinates",
+        "  Pre-hardware simulation — TRL-3",
+    ]
+
+    ax4.text(0.03, 0.97, "\n".join(lines),
+             transform=ax4.transAxes,
+             fontsize=9.5, family='monospace',
+             va='top', color='white', linespacing=1.65)
+
+    save_path = "publication_figure.png"
+    fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='#0d1117')
+    plt.close('all')
+
+t_end   = time.time()
+runtime = t_end - t_start
+
+print(f"\n  Pipeline runtime: {runtime:.1f} seconds")
+print(f"  Figure saved to : {save_path}")
+print("  run_all.py complete")
