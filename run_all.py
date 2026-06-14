@@ -352,6 +352,110 @@ with plt.style.context('dark_background'):
     fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='#0d1117')
     plt.close('all')
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 7 — Realistic-hardware comparison pass (ideal vs realistic)
+# ─────────────────────────────────────────────────────────────────────────────
+# Guarded: any failure here must NOT blank the already-saved publication figure.
+print("─" * 56)
+print("  STEP 7 — Realistic-hardware comparison pass …")
+print("─" * 56)
+try:
+    # Regenerate the scene WITH hardware imperfections (overwrites array_data.npy).
+    generate_array_data(realistic=True)
+    plt.close('all')
+
+    # MUSIC on realistic data
+    music_real       = music_spectrum(theta_scan=theta_scan,
+                                      save_fig="music_spectrum_realistic.png")
+    plt.close('all')
+    peaks_idx_real   = find_top_peaks(music_real, theta_scan, n_signals=3, min_sep_deg=25)
+    peak_angles_real = theta_scan[peaks_idx_real]
+    detected_real    = np.array([
+        peak_angles_real[np.argmin(np.abs(peak_angles_real - az))] for az in TRUE_AZ
+    ])
+    doa_errors_real  = detected_real - TRUE_AZ
+    max_error_real   = float(np.max(np.abs(doa_errors_real)))
+
+    # MVDR on realistic data (reuse the same _sv()-based null-depth formula)
+    w_real           = mvdr_beamformer(save_fig="mvdr_beampattern_realistic.png",
+                                       weights_file="mvdr_weights_realistic.npy")
+    plt.close('all')
+    gps_gain_db_real = 10 * np.log10(abs(w_real.conj() @ a_gps_sv) ** 2 + 1e-30)
+    jam_gains_real   = [10 * np.log10(abs(w_real.conj() @ aj) ** 2 + 1e-30)
+                        for aj in a_jams_sv]
+    null_depths_real = [gps_gain_db_real - g for g in jam_gains_real]
+
+    # ── Console ideal-vs-realistic table ──────────────────────────────────────
+    print()
+    print(SEP)
+    print("  IDEAL vs REALISTIC  (hardware imperfections)")
+    print(SEP)
+    print(f"  {'Metric':<22}{'Ideal':>12}{'Realistic':>12}")
+    print("  " + "─" * 46)
+    for k in range(3):
+        print(f"  J{k+1} DoA error (deg)   {doa_errors[k]:>+12.2f}{doa_errors_real[k]:>+12.2f}")
+    for k in range(3):
+        print(f"  J{k+1} null depth (dB)   {null_depths[k]:>12.1f}{null_depths_real[k]:>12.1f}")
+    print(f"  {'GPS gain (dB)':<22}{gps_gain_db:>+12.2f}{gps_gain_db_real:>+12.2f}")
+    print(f"  {'Max DoA error (deg)':<22}{max_error:>12.2f}{max_error_real:>12.2f}")
+    print(SEP)
+
+    # ── realistic_comparison.png : 1×2 dark panels ────────────────────────────
+    with plt.style.context('dark_background'):
+        figR, (axA, axB) = plt.subplots(1, 2, figsize=(14, 5))
+        figR.suptitle("COGNAV-4 — Ideal vs Realistic (hardware imperfections)",
+                      fontsize=13, fontweight='bold')
+
+        # Panel A — MUSIC pseudospectrum, ideal vs realistic
+        axA.plot(theta_scan, music_results, color='royalblue',  lw=1.2, label='Ideal')
+        axA.plot(theta_scan, music_real,    color='darkorange', lw=1.2, label='Realistic')
+        for k, az in enumerate(TRUE_AZ):
+            axA.axvline(az, color=JCOL[k], linestyle='--', lw=1.4, alpha=0.8)
+        axA.set_xlabel("Azimuth (deg)", fontsize=10)
+        axA.set_ylabel("Pseudospectrum (dB)", fontsize=10)
+        axA.set_title("MUSIC pseudospectrum", fontsize=11, fontweight='bold')
+        axA.set_xlim(-180, 180)
+        axA.set_xticks(np.arange(-180, 181, 45))
+        axA.legend(fontsize=8, loc='upper left')
+        axA.grid(True, alpha=0.2)
+
+        # Panel B — grouped null-depth bars per jammer
+        xb = np.arange(3)
+        bw = 0.36
+        axB.bar(xb - bw / 2, null_depths,      bw, color='royalblue',  label='Ideal')
+        axB.bar(xb + bw / 2, null_depths_real, bw, color='darkorange', label='Realistic')
+        axB.axhline(40, color='white', linestyle=':', lw=1.0, alpha=0.7, label='40 dB target')
+        axB.set_xticks(xb)
+        axB.set_xticklabels([f"J{k+1}\n{TRUE_AZ[k]:+.1f}°" for k in range(3)])
+        axB.set_ylabel("Null depth (dB)", fontsize=10)
+        axB.set_title("MVDR null depth per jammer", fontsize=11, fontweight='bold')
+        axB.legend(fontsize=8, loc='upper right')
+        axB.grid(True, alpha=0.2, axis='y')
+        axB.text(0.02, 0.97,
+                 f"GPS gain: ideal {gps_gain_db:+.2f} dB | real {gps_gain_db_real:+.2f} dB\n"
+                 f"Max DoA err: ideal {max_error:.2f}° | real {max_error_real:.2f}°",
+                 transform=axB.transAxes, fontsize=7.5, va='top', color='white')
+
+        figR.tight_layout(rect=[0, 0, 1, 0.95])
+        figR.savefig("realistic_comparison.png", dpi=150,
+                     bbox_inches='tight', facecolor='#0d1117')
+        plt.close('all')
+    print("  Realistic comparison saved to : realistic_comparison.png")
+
+    # Restore array_data.npy to the IDEAL scene so the committed artifact
+    # matches publication_figure.png (hybrid_sim is self-contained, unaffected).
+    generate_array_data()
+    plt.close('all')
+    print("  array_data.npy restored to ideal scene")
+
+except Exception as exc:
+    print(f"  [STEP 7 SKIPPED] realistic pass failed: {exc}")
+    try:                       # best-effort: leave array_data.npy on the ideal scene
+        generate_array_data()
+        plt.close('all')
+    except Exception:
+        pass
+
 t_end   = time.time()
 runtime = t_end - t_start
 

@@ -25,9 +25,9 @@ Algorithm
 
 Scenario (from generate_array_data.py)
 ---------------------------------------
-  2 jammers:  az = +30.96° (NE), +165.96° (NW)
+  3 jammers:  az = +30.96° (NE), +165.96° (NW), −71.57° (SE)
   Array:      2×2 URA, half-wavelength spacing in X and Y
-  n_signals = 3  →  noise subspace has 2 eigenvectors
+  n_signals = 3  →  noise subspace has 1 eigenvector
 
 Input  : array_data.npy    (written by generate_array_data.py)
 Output : music_spectrum.png
@@ -72,13 +72,13 @@ def music_spectrum(
     """
     Estimate jammer azimuths using MUSIC and produce a 2-panel figure.
 
-    Panel 1 — Spatial spectrum (dB) vs azimuth: peaks at both jammer directions.
-    Panel 2 — Covariance eigenvalues: 2 large (signal) + 2 small (noise).
+    Panel 1 — Spatial spectrum (dB) vs azimuth: peaks at all three jammer directions.
+    Panel 2 — Covariance eigenvalues: 3 large (signal) + 1 small (noise).
 
     Parameters
     ----------
     data_file  : path to the complex IQ array data (.npy)
-    n_signals  : number of sources to resolve (default 2, one per jammer)
+    n_signals  : number of sources to resolve (default 3, one per jammer)
     f_carrier  : GPS L1 carrier frequency — sets wavelength and element spacing
     theta_scan : azimuth angles (degrees) over which to evaluate the spectrum
     save_fig   : output filename for the saved figure
@@ -98,7 +98,7 @@ def music_spectrum(
 
     # R̂ = (1/N) · X · X^H   — 4×4 Hermitian, positive semi-definite.
     # Entry R̂[m, k] is the time-averaged cross-correlation between elements m and k.
-    # For 2 jammers: R̂ ≈ Σ_i P_i · a_i·a_i^H + σ²·I  (rank-2 signal + scaled identity)
+    # For 3 jammers: R̂ ≈ Σ_i P_i · a_i·a_i^H + σ²·I  (rank-3 signal + scaled identity)
     R = (X @ X.conj().T) / n_samples               # shape (4, 4), complex128
 
     # ==========================================================================
@@ -110,8 +110,8 @@ def music_spectrum(
     # eigenvalues  : shape (4,), real, ascending (λ₁ ≤ λ₂ ≤ λ₃ ≤ λ₄)
     # eigenvectors : shape (4,4), columns are orthonormal eigenvectors
 
-    # With 2 signals and 4 elements, the noise subspace has 4 - 2 = 2 eigenvectors —
-    # the two eigenvectors corresponding to the two smallest eigenvalues.
+    # With 3 signals and 4 elements, the noise subspace has 4 - 3 = 1 eigenvector —
+    # the single eigenvector corresponding to the smallest eigenvalue.
     n_noise  = n_elements - n_signals               # = 1
     E_noise  = eigenvectors[:, :n_noise]            # shape (4, 1)
 
@@ -218,7 +218,7 @@ def music_spectrum(
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
     fig.suptitle(
-        "MUSIC Direction-of-Arrival  |  2×2 URA, GPS L1 (1575.42 MHz)  |  2 Jammers",
+        "MUSIC Direction-of-Arrival  |  2×2 URA, GPS L1 (1575.42 MHz)  |  3 Jammers",
         fontsize=13, fontweight='bold'
     )
 

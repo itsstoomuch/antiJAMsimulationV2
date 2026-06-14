@@ -29,6 +29,14 @@ import numpy as np
 from scipy.signal import butter, lfilter
 
 
+def quantise(x: np.ndarray, bits: int = 14, full_scale: float = 1.0) -> np.ndarray:
+    """Hard-clip and uniformly quantise a complex array to a b-bit ADC."""
+    step = 2 * full_scale / (2 ** bits)
+    xr = np.clip(x.real, -full_scale, full_scale)
+    xi = np.clip(x.imag, -full_scale, full_scale)
+    return np.round(xr / step) * step + 1j * np.round(xi / step) * step
+
+
 def generate_array_data(
     n_samples:   int   = 1000,        # IQ snapshots per channel
     fs:          float = 10e6,        # ADC sample rate, Hz
@@ -36,6 +44,8 @@ def generate_array_data(
     f_if:        float = 1e3,         # post-downconversion IF, Hz
     jammer_type: str   = 'CW',        # 'CW' | 'FMCW' | 'Barrage'
     seed:        int   = 42,          # RNG seed
+    realistic:   bool  = False,       # apply hardware imperfections when True
+    n_jammers:   int   = 3,           # number of jammers to include (1–3)
 ) -> np.ndarray:
     """
     Generate synthetic 4 × n_samples complex IQ data for a 2×2 URA.
@@ -70,6 +80,10 @@ def generate_array_data(
     """
 
     rng = np.random.default_rng(seed)
+
+    # IMPERFECTION 7: realistic mode uses 256 snapshots (must precede time vector)
+    if realistic:
+        n_samples = 256
 
     # =========================================================================
     # 1. PHYSICAL CONSTANTS
@@ -290,22 +304,75 @@ def generate_array_data(
     # waveform.  Multiplying by the amplitude applies path loss + transmit power.
     X  = np.outer(a_gps,  amp_gps  * s_gps)
     X += np.outer(a_jam1, amp_jam1 * s_jam1)
-    X += np.outer(a_jam2, amp_jam2 * s_jam2)
-    X += np.outer(a_jam3, amp_jam3 * s_jam3)
+    if n_jammers >= 2:
+        X += np.outer(a_jam2, amp_jam2 * s_jam2)
+    if n_jammers >= 3:
+        X += np.outer(a_jam3, amp_jam3 * s_jam3)
 
     # =========================================================================
-    # 11. ADDITIVE WHITE GAUSSIAN NOISE  (thermal noise floor)
+    # 11. ADDITIVE WHITE GAUSSIAN NOISE  (ideal mode only; realistic uses LNA model)
     # =========================================================================
 
-    # Noise amplitude is set to half the GPS signal amplitude, placing the
-    # thermal noise floor ≈ 6 dB below the (already very weak) GPS signal.
-    # Real kTB at 290 K in 10 MHz is ≈ −134 dBW — similar to GPS received power.
-    noise_amplitude = amp_gps * 0.5
-    noise = noise_amplitude * (
-        rng.standard_normal((4, n_samples))
-        + 1j * rng.standard_normal((4, n_samples))
-    ) / np.sqrt(2)
-    X += noise    # X is now (4, n_samples) complex128
+    if not realistic:
+        # Noise amplitude is set to half the GPS signal amplitude, placing the
+        # thermal noise floor ≈ 6 dB below the (already very weak) GPS signal.
+        noise_amplitude = amp_gps * 0.5
+        noise = noise_amplitude * (
+            rng.standard_normal((4, n_samples))
+            + 1j * rng.standard_normal((4, n_samples))
+        ) / np.sqrt(2)
+        X += noise    # X is now (4, n_samples) complex128
+
+    # =========================================================================
+    # 11b. HARDWARE IMPERFECTIONS  (realistic=True only)
+    # =========================================================================
+
+    if realistic:
+        # Fresh RNG keyed to seed — makes HW parameter values deterministic
+        # regardless of how many draws the signal-generation RNG consumed.
+        rng_hw = np.random.default_rng(seed)
+
+        # IMPERFECTION 1 — inter-channel phase and gain mismatch
+        phase_errors_deg = rng_hw.uniform(-5, 5, size=4)
+        gain_errors      = rng_hw.uniform(0.90, 1.10, size=4)
+        for m in range(4):
+            X[m] *= gain_errors[m] * np.exp(1j * np.deg2rad(phase_errors_deg[m]))
+        print("  Hardware imperfections (realistic=True):")
+        for m in range(4):
+            print(f"    Channel {m}: phase {phase_errors_deg[m]:+.1f}°, "
+                  f"gain {gain_errors[m]:.2f}")
+
+        # IMPERFECTION 2 — mutual coupling for 2×2 URA (adjacent ≈ −26 dB)
+        C = np.eye(4, dtype=complex)
+        C[0,1]=C[1,0]=C[0,2]=C[2,0]=C[1,3]=C[3,1]=C[2,3]=C[3,2] = 0.05 + 0.02j
+        C[0,3]=C[3,0]=C[1,2]=C[2,1]                                = 0.02 + 0.01j
+        X = C @ X
+
+        # IMPERFECTION 3 — 3 dB LNA noise figure replaces ideal thermal noise
+        NF_linear   = 10 ** (3.0 / 10)
+        noise_power = (amp_gps * 0.5) ** 2 * NF_linear
+        noise       = np.sqrt(noise_power / 2) * (
+            rng_hw.standard_normal((4, n_samples))
+            + 1j * rng_hw.standard_normal((4, n_samples))
+        )
+        X += noise
+
+        # IMPERFECTION 4 — RF cable loss 0.5 dB
+        cable_loss = 10 ** (-0.5 / 20)
+        X         *= cable_loss
+
+        # IMPERFECTION 5 — oscillator phase drift (independent per channel)
+        for m in range(4):
+            drift_rate = rng_hw.uniform(-0.02, 0.02)
+            drift      = np.cumsum(np.ones(n_samples) * drift_rate)
+            X[m]      *= np.exp(1j * np.deg2rad(drift))
+
+        # IMPERFECTION 6 — 14-bit ADC quantisation
+        # Full scale set to 3× the actual signal RMS (jammer-dominated), matching
+        # how real hardware is specified: against the expected worst-case input level.
+        signal_rms = np.sqrt(np.mean(np.abs(X[0]) ** 2))
+        full_scale = 3.0 * signal_rms
+        X = quantise(X, bits=14, full_scale=full_scale)
 
     # =========================================================================
     # 12. SAVE

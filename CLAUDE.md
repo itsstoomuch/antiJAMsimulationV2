@@ -21,7 +21,7 @@ Python simulation of a hybrid analog-digital GPS anti-jamming system.
 ## The 4 simulations to build
 1. generate_array_data.py — 4-channel synthetic IQ generator
 2. music_spectrum.py — MUSIC algorithm angle estimation
-3. mvdr_weights.py — MVDR null steering beamformer
+3. mvdr_beamformer.py — MVDR null steering beamformer
 4. hybrid_sim.py — hybrid analog pre-cancel + digital MVDR
 5. run_all.py — master script, calls all four, generates all plots
 
@@ -38,34 +38,43 @@ showing hybrid stays higher longer before degrading.
 - Comments explain the physics not just the code
 
 
-## Current Status — MUSIC Fix In Progress
+## Current Status — Shipped Design (azimuth-projected, all KPIs pass)
 
-PROBLEM IDENTIFIED:
-- 4 element array cannot resolve 4 sources (3 jammers + GPS)
-- Maximum sources = N-1 = 3 for 4 element array
-- Signal amplitudes too small (1e-4) causing numerical issues
-- Covariance matrix needs regularisation
+DESIGN AS BUILT:
+- 3 simultaneous CW jammers — J1 +30.96°, J2 +165.96°, J3 −71.57° azimuth —
+  from real 3D coordinates in generate_array_data.py.
+- GPS satellite at zenith (el ≈ 90°). The horizon-boresight element pattern
+  (cos(el) power) nulls the zenith GPS to ~zero amplitude, so the array data is
+  effectively 3 jammers only — which a 4-element array CAN resolve.
+- Steering model: AZIMUTH-PROJECTED phase (horizontal-plane unit vector);
+  elevation enters only through the element-pattern amplitude gain. MUSIC scans
+  azimuth at el = 0° (1-D) → clean rank-3 signal subspace, 1-D noise subspace.
+- MVDR look direction constrained at az = 0° (GPS), 3 simultaneous nulls.
 
-FIXES NEEDED IN music_spectrum.py:
-1. Reduce to 2 jammers in generate_array_data.py (keep jammer1 
-   at [500,300,0] and jammer2 at [-800,200,0], remove jammer3)
-2. Normalise array data before MUSIC: X_norm = X / max(abs(X))
-3. Add diagonal loading: R = R + 1e-6 * eye(4)
-4. n_signals = 3 (GPS + 2 jammers)
-5. Scan -180 to +180 degrees full azimuth
+KPIs (python run_all.py): DoA error < 0.1°, nulls > 40 dB on all 3 jammers,
+GPS passband gain ≈ 0 dB, hybrid extended range > 10 dB — ALL PASS.
 
-EXPECTED RESULT AFTER FIX:
-- Jammer 1 found near +30.96°
-- Jammer 2 found near +165.96°
-- GPS found near 0°
-- 3 large eigenvalues visible in bar chart
+REALISTIC MODE:
+- generate_array_data(realistic=True) applies hardware imperfections (per-element
+  phase/gain mismatch, mutual coupling, LNA noise figure, cable loss, oscillator
+  phase drift, 14-bit ADC quantization; 256 snapshots).
+- run_all.py STEP 7 runs an ideal-vs-realistic comparison (realistic_comparison.png
+  + console table); realistic shows degraded-but-finite DoA/nulls.
 
-FILES COMPLETED:
-- generate_array_data.py — realistic geometry, 2x2 URA, 
-  path loss, cosine pattern, CW/FMCW/Barrage jammer types
-- music_spectrum.py — needs fix above
-- mvdr_beamformer.py — done
-- hybrid_sim.py — done  
-- run_all.py — done
+DOCUMENTED LIMIT:
+- A 4-element URA reliably resolves at most N−1 = 3 sources. A true-3D-phase
+  steering model (keeping GPS at zenith as a 4th source) was tried and REVERTED:
+  it leaves only a 1-D noise subspace for 3 jammers + GPS, collapsing MUSIC
+  selectivity (a spurious az≈+53° ridge competes with the true J1 peak). The
+  azimuth-projected model + horizon element pattern is the validated design.
+
+FILES:
+- generate_array_data.py — 2×2 URA geometry, path loss, horizon (cos el) element
+  pattern, azimuth-projected steering, CW/FMCW/Barrage jammers, realistic=True
+  hardware-imperfection mode, n_jammers param (1–3).
+- music_spectrum.py — MUSIC DoA, el=0 azimuth scan, n_signals=3.
+- mvdr_beamformer.py — MVDR null steering, az=0 GPS constraint.
+- hybrid_sim.py — analog pre-cancel + digital MVDR dynamic-range sweep.
+- run_all.py — master pipeline + STEP 7 ideal-vs-realistic comparison.
 
 GITHUB: git@github.com:itsstoomuch/antiJAMsimulationV2.git
