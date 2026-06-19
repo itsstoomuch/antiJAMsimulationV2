@@ -2,7 +2,7 @@
 
 ## Context
 
-The existing sim suite (generate_array_data.py, music_spectrum.py, mvdr_beamformer.py, hybrid_sim.py, realistic_sim.py, dof_comparison.py) validated the math but **cannot model Architecture 3** (COGNAV-P1, per COGNAV_ARCHITECTURES.md / plan.md) and **cannot be ported to C/FPGA**. Audit findings (gap):
+The existing sim suite (generate_array_data.py, music_spectrum.py, mvdr_beamformer.py, hybrid_sim.py, realistic_sim.py, dof_comparison.py) validated the math but **cannot model Architecture 3** (NAVGUARD-P1, per NAVGUARD_ARCHITECTURES.md / plan.md) and **cannot be ported to C/FPGA**. Audit findings (gap):
 
 | Gap | Detail |
 | :-- | :-- |
@@ -81,7 +81,7 @@ cogsim/
 
 - **P0 — scaffold + geometry:** config.py, geometry.py with unit tests proving math-doc identities (Kronecker order vs element order; g=sin(el); known DOA phase values). Gate: tests pass.
 - **P1 — scene + plant:** port waveform generators and imperfection models from legacy (cite source functions), add the NEW models (AD8341 VM with control quantization + compression, AD8314 detector, envelope-clip ADC). Gate: open-loop scene through plant reproduces legacy MUSIC DOA accuracy (sanity anchor vs music_spectrum.py results, ~0.02° on strong jammers).
-- **P2 — core float32 kernels:** evd4 (Jacobi vs scipy.eigh reference <1e-4 rel), music4, mvdr4, weights. Gate: open-loop delivered null through the VM plant agrees with the **§6.2 closed-form prediction C ≈ −10·log₁₀(ε_A²+ε_φ²) evaluated at the plant's actual injected error magnitudes** (self-consistent anchor). The legacy "26–36 dB" figure is order-of-magnitude sanity only — it was partly derived with the old buggy geometry. If corrected geometry shifts the numbers, **COGNAV_ARCHITECTURES.md gets updated to match cogsim, never the reverse.**
+- **P2 — core float32 kernels:** evd4 (Jacobi vs scipy.eigh reference <1e-4 rel), music4, mvdr4, weights. Gate: open-loop delivered null through the VM plant agrees with the **§6.2 closed-form prediction C ≈ −10·log₁₀(ε_A²+ε_φ²) evaluated at the plant's actual injected error magnitudes** (self-consistent anchor). The legacy "26–36 dB" figure is order-of-magnitude sanity only — it was partly derived with the old buggy geometry. If corrected geometry shifts the numbers, **NAVGUARD_ARCHITECTURES.md gets updated to match cogsim, never the reverse.**
 - **P3 — trim loop (the headline):** trim.py + controller.py; harness measures delivered null open-loop vs trimmed on identical scenes — plan.md task S-1. **Run as a sweep, not a one-shot:** trim gain vs imperfection magnitude (cal residue, VM nonlinearity, drift level) and null-depth-vs-time under a simulated temperature/drift ramp. A static, perfectly-calibrated scene would show ~0 dB trim gain by construction and prove nothing. Gate: trim gain quantified across the sweep (report honestly), re-null epoch count < 100 ms equivalent. **Contingency if static gain < +5 dB:** the drift-ramp result becomes the headline — trimmed null holds while open-loop decays (drift-immunity / self-verification narrative), and plan.md §4's claims get re-worded accordingly before any datasheet use.
 
   **P3 runs in two ordered sub-phases to kill a circularity (review flag):** the quasi-static pacing is defined relative to the trim step size, so the step size must be frozen *before* the ramp rate is derived from it — otherwise tuning the step silently retunes the pass criteria.
@@ -95,12 +95,12 @@ cogsim/
   - **Pass 2 (divergence):** trimmed − open-loop ≥ 15 dB at ramp end.
   - Both must hold for the drift-immunity narrative to be claimable; if either fails, that is a genuine negative result for the trim loop and goes in the report as such — no third narrative gets invented post hoc.
 
-  **Standalone deliverable from P3 (independent of which headline wins):** the quantitative quasi-static limit. From the frozen (Δ, µ) and the trim update rate, compute the maximum tolerable residual-error slew, and map it through §5.8 to a **maximum jammer angular rate (deg/s) before the trim loop stops helping**. This converts COGNAV_ARCHITECTURES.md's qualitative "trim needs a quasi-static residual" limitation into a datasheet operating-conditions number — report it explicitly and back-fill it into the arch doc's Arch 3 limitations.
+  **Standalone deliverable from P3 (independent of which headline wins):** the quantitative quasi-static limit. From the frozen (Δ, µ) and the trim update rate, compute the maximum tolerable residual-error slew, and map it through §5.8 to a **maximum jammer angular rate (deg/s) before the trim loop stops helping**. This converts NAVGUARD_ARCHITECTURES.md's qualitative "trim needs a quasi-static residual" limitation into a datasheet operating-conditions number — report it explicitly and back-fill it into the arch doc's Arch 3 limitations.
 - **P4 — fixed-point PL kernels + vectors:** cov_accum + cal_corr in integers; float-vs-fixed delta budget (null depth change < 0.5 dB); export all golden vector sets; write the C signature header doc. Gate: fixed-point harness run within budget of float run.
 
 ## Verification
 
-- `pytest cogsim/tests/` — kernel unit tests vs closed forms from COGNAV_MathModelling_v2_CORRECTED.md: MVDR optimality (§5.3–5.4), null-vs-Δθ −20 dB/decade (§5.8), noise factor α(2−α) (§6.5), cal identity recovery of injected mismatch (§13.2), Jacobi vs scipy on random Hermitian PSD matrices.
+- `pytest cogsim/tests/` — kernel unit tests vs closed forms from NAVGUARD_MathModelling_v2_CORRECTED.md: MVDR optimality (§5.3–5.4), null-vs-Δθ −20 dB/decade (§5.8), noise factor α(2−α) (§6.5), cal identity recovery of injected mismatch (§13.2), Jacobi vs scipy on random Hermitian PSD matrices.
 - End-to-end: `python -m cogsim.harness` prints the acceptance table — delivered null (1/2/3 jammers) open-loop vs trimmed, trim gain, epochs-to-renull, float-vs-fixed deltas. Compare anchors against legacy run_all.py results where overlapping (DOA accuracy, ideal null depths).
 - Golden vectors: `python -m cogsim.vectors.export` regenerates fixtures; a checksum manifest catches accidental kernel drift.
 

@@ -1,6 +1,6 @@
 # Architecture 3 — Hybrid Analog-Digital CRPA with Sensing Tap
 
-## COGNAV-4 | GPS L1 1575.42 MHz | Full Hybrid Two-Layer Architecture
+## NAVGUARD-4 | GPS L1 1575.42 MHz | Full Hybrid Two-Layer Architecture
 
 **Status:** Draft  
 **Source:** Hand-drawn block diagram (Arch 3\) \+ CRPA\_Report Chapter 5–7  
@@ -481,4 +481,4 @@ On a UAV, the rotating propeller blades cause periodic multipath reflections at 
 ---
 
 *End of arch3.md (corrected — Fable review, June 2026).*  
-*COGNAV Project | June 2026*  
+*NAVGUARD Project | June 2026*  

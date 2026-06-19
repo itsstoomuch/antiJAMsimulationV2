@@ -1,10 +1,10 @@
-# plan.md — COGNAV-P1: L1-Band Analog-Nulling CRPA Prototype (Drone-Mounted)
+# plan.md — NAVGUARD-P1: L1-Band Analog-Nulling CRPA Prototype (Drone-Mounted)
 
 ## Single prototype. GPS L1 only. Analog nulling used to its full depth. Our own design — Wall-E4 is the benchmark, not the template.
 
 **Date:** June 2026
 **Base architecture:** Arch 3 (arch3.md) — sensing tap + analog weighting + RF GPS path
-**Math:** COGNAV_MathModelling_v2_CORRECTED.md v2.1 (incl. §13)
+**Math:** NAVGUARD_MathModelling_v2_CORRECTED.md v2.1 (incl. §13)
 **Hardware verdicts:** ARCH_REVIEW_AND_HARDWARE.md
 **Benchmark (for spec targets only):** RIMCO Wall-E4 — 4 elements, 3 nulls, 5 W, SMA RF out + embedded RX
 
@@ -172,5 +172,5 @@ All jamming is cabled/conducted or at an authorized facility — never radiated 
 
 ---
 
-*plan.md — COGNAV-P1 single-prototype plan: L1-only, analog-nulling-first, drone-mounted. No code in this phase.*
-*COGNAV Project | June 2026*
+*plan.md — NAVGUARD-P1 single-prototype plan: L1-only, analog-nulling-first, drone-mounted. No code in this phase.*
+*NAVGUARD Project | June 2026*

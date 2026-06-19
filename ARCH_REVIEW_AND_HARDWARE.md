@@ -1,7 +1,7 @@
-# COGNAV-4 — Architecture Review, Math-Model Mapping, and Hardware Audit
+# NAVGUARD-4 — Architecture Review, Math-Model Mapping, and Hardware Audit
 
 **Version 1.0 — June 2026 (Fable review)**
-**Inputs: arch1.md, arch3.md, COGNAV_MathModelling_v2_CORRECTED.md, components_arch3.docx**
+**Inputs: arch1.md, arch3.md, NAVGUARD_MathModelling_v2_CORRECTED.md, components_arch3.docx**
 **Targets: professional-grade drone-mounted CRPA, power goal 1.5 W, FPGA candidate "Z-turn 7035"**
 
 ---
@@ -67,7 +67,7 @@
 
 ## Part 3 — Is the math model the same for both architectures?
 
-**The core is shared; the data acquisition and the adaptation loop are not.** Section-by-section mapping of COGNAV_MathModelling_v2_CORRECTED.md:
+**The core is shared; the data acquisition and the adaptation loop are not.** Section-by-section mapping of NAVGUARD_MathModelling_v2_CORRECTED.md:
 
 | Math doc section | Arch 1 | Arch 3 |
 | :-- | :-- | :-- |
@@ -166,4 +166,4 @@ Key insight for T3: the per-element math load is tiny — a 4×4 complex covaria
 
 ---
 
-*End of review. COGNAV Project — June 2026*
+*End of review. NAVGUARD Project — June 2026*

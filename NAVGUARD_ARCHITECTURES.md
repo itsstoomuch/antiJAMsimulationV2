@@ -1,10 +1,10 @@
-# COGNAV — The Three CRPA Architectures
+# NAVGUARD — The Three CRPA Architectures
 
 ## GPS L1 Anti-Jamming, 2×2 Array: Architecture Definition Document
 
 **Version 1.1 — June 2026 | Compact reference: block diagram (PNG + ASCII) + math + limitations + strengths per architecture, comparison, conclusion.**
 
-> **Naming map (avoid confusion with repo filenames):** Arch 1 here = `arch1.md` (blind power-inversion). Arch 2 here = `arch3.md` (sensing-tap hybrid). Arch 3 here = the closed-loop product architecture of `plan.md` (COGNAV-P1). Math references (§) point to `COGNAV_MathModelling_v2_CORRECTED.md` v2.1.
+> **Naming map (avoid confusion with repo filenames):** Arch 1 here = `arch1.md` (blind power-inversion). Arch 2 here = `arch3.md` (sensing-tap hybrid). Arch 3 here = the closed-loop product architecture of `plan.md` (NAVGUARD-P1). Math references (§) point to `NAVGUARD_MathModelling_v2_CORRECTED.md` v2.1.
 > **Diagrams:** `arch1_diagram.png`, `arch2_diagram.png`, `arch3_diagram.png` (regenerate via `gen_arch_diagrams.py`). Color code in all three: **green** = analog GPS path, **blue** = digital sensing, **orange** = control/feedback, **gray** = support, **yellow** = I/O.
 
 ---
@@ -114,13 +114,13 @@ The sense path delivers true 4-channel snapshots X ∈ ℂ^{4×N}:
 
 ---
 
-## ARCHITECTURE 3 — Closed-Loop Hybrid (MVDR aim + power-detector trim) — COGNAV-P1
+## ARCHITECTURE 3 — Closed-Loop Hybrid (MVDR aim + power-detector trim) — NAVGUARD-P1
 
 *"The array that sees, aims, and then polishes."* Arch 2's sensing brain **plus** Arch 1's power-feedback used as a *fine-trim loop around the MVDR solution*. This is the product architecture: it makes full use of analog nulling by closing the loop around every analog imperfection at once.
 
 ### 3.1 Block diagram
 
-![Architecture 3 — Closed-Loop Hybrid (COGNAV-P1)](arch3_diagram.png)
+![Architecture 3 — Closed-Loop Hybrid (NAVGUARD-P1)](arch3_diagram.png)
 
 ```
 ANT1..4 → [LIM→SAW→LNA] → [CPLR −10dB] → [AD8341 VM ×4] → [Σ WILKINSON] ─┬→ [POST-LNA → SMA CLEAN L1 OUT]
@@ -132,7 +132,7 @@ ANT1..4 → [LIM→SAW→LNA] → [CPLR −10dB] → [AD8341 VM ×4] → [Σ WIL
                                                   └→ [AD5676 DAC] → VMs
 ```
 
-(Part-level version with the full drone-prototype detail: `cognav_p1_block_diagram.png`.)
+(Part-level version with the full drone-prototype detail: `navguard_p1_block_diagram.png`.)
 
 ### 3.2 Math — the three-stage weight law
 
@@ -185,7 +185,7 @@ null_floor ≈ 20·log₁₀(Δ_dither · |∂(wᴴa_j)/∂w|) — the §5.8 law
 | Drift handling | implicit (always searching) | none until next solve | explicit (trim loop) |
 | Hardware cost / power | lowest | high (sensing chain) | high + detector loop (≤8 W flight) |
 | Failure behavior | — (is the simplest mode) | weights freeze stale | degrades to Arch 2 → Arch 1 → frozen |
-| Role in COGNAV | **fallback mode** of Arch 3 | **research baseline** + sensing layer of Arch 3 | **the product (COGNAV-P1)** |
+| Role in NAVGUARD | **fallback mode** of Arch 3 | **research baseline** + sensing layer of Arch 3 | **the product (NAVGUARD-P1)** |
 
 ---
 
@@ -197,9 +197,9 @@ The three architectures are one family answering a single question — *how do w
 - **Arch 2 SEES** — computes exact weights from 4-channel coherent sensing: fast (one-shot MVDR), observable (sub-degree jammer bearings), but **open-loop** — component imperfection caps the delivered null at ~26–36 dB no matter how good the math is.
 - **Arch 3 SEES, AIMS, AND POLISHES** — MVDR provides the aim, the power-detector trim loop closes around every analog imperfection at once, and calibration ties the digital model to the analog reality. Its delivered null depth is limited by physics (detector noise, DOA error), not by component tolerance.
 
-**Arch 3 is the build target (COGNAV-P1, plan.md)** — and not only on performance. It *contains* the other two: Arch 2 is its sensing layer running open-loop, and Arch 1 is its fallback mode when the sensing chain faults. One hardware platform therefore demonstrates all three architectures, which is simultaneously the strongest engineering choice (graceful degradation instead of failure) and the strongest research narrative (a controlled A/B/C comparison of three weight-learning strategies on identical hardware, identical array, identical RF chain — the only variable is the intelligence).
+**Arch 3 is the build target (NAVGUARD-P1, plan.md)** — and not only on performance. It *contains* the other two: Arch 2 is its sensing layer running open-loop, and Arch 1 is its fallback mode when the sensing chain faults. One hardware platform therefore demonstrates all three architectures, which is simultaneously the strongest engineering choice (graceful degradation instead of failure) and the strongest research narrative (a controlled A/B/C comparison of three weight-learning strategies on identical hardware, identical array, identical RF chain — the only variable is the intelligence).
 
 ---
 
-*COGNAV_ARCHITECTURES.md v1.1 — companion to plan.md, COGNAV_MathModelling_v2_CORRECTED.md (math §refs), ARCH_REVIEW_AND_HARDWARE.md (BOM), diagrams arch1/2/3_diagram.png + cognav_p1_block_diagram.png.*
-*COGNAV Project | June 2026*
+*NAVGUARD_ARCHITECTURES.md v1.1 — companion to plan.md, NAVGUARD_MathModelling_v2_CORRECTED.md (math §refs), ARCH_REVIEW_AND_HARDWARE.md (BOM), diagrams arch1/2/3_diagram.png + navguard_p1_block_diagram.png.*
+*NAVGUARD Project | June 2026*

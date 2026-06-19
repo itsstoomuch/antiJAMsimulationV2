@@ -1,7 +1,7 @@
-"""Render the three COGNAV architecture block diagrams (matching style):
+"""Render the three NAVGUARD architecture block diagrams (matching style):
   arch1_diagram.png — Blind Power-Inversion Nulling
   arch2_diagram.png — Sensing-Tap Hybrid (open-loop MUSIC+MVDR)
-  arch3_diagram.png — Closed-Loop Hybrid (MVDR aim + trim) — COGNAV-P1
+  arch3_diagram.png — Closed-Loop Hybrid (MVDR aim + trim) — NAVGUARD-P1
 Colors: green = analog GPS path, blue = digital sensing, orange = control/feedback,
 gray = support, yellow = I/O.
 """
@@ -251,7 +251,7 @@ sensing_arch(
     trim=False)
 sensing_arch(
     "arch3_diagram.png",
-    "ARCHITECTURE 3  —  Closed-Loop Hybrid (MVDR aim + power-detector TRIM)  ·  COGNAV-P1",
+    "ARCHITECTURE 3  —  Closed-Loop Hybrid (MVDR aim + power-detector TRIM)  ·  NAVGUARD-P1",
     '"Sees, aims, then polishes"  |  Arch 2 sensing + Arch 1 feedback as a fine-trim loop  |  '
     "target ≥ 35 dB delivered null  |  contains Arch 1 & 2 as fallback modes",
     "ZYNQ-7020 (FPGA + ARM)\n• R̂ covariance → MUSIC DOA\n• MVDR weight solve (AIM)"

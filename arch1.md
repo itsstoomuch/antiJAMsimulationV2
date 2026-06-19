@@ -1,5 +1,5 @@
 # Architecture 1 — Blind Analog Nulling (Power-Inversion CRPA)
-## COGNAV-4 CRPA Anti-Jamming System | GPS L1 1575.42 MHz
+## NAVGUARD-4 CRPA Anti-Jamming System | GPS L1 1575.42 MHz
 
 **Status:** Corrected (Fable review) — companion analysis in ARCH_REVIEW_AND_HARDWARE.md  
 **Source:** Hand-drawn block diagram (Arch 1) — originally titled "Dedicated Sensing Mode"; renamed because with a single post-combiner ADC this architecture has **no per-element sensing** (see Limitations)  
@@ -348,4 +348,4 @@ Full comparison and shared-hardware recommendation in **ARCH_REVIEW_AND_HARDWARE
 ---
 
 *End of arch1.md (corrected).*  
-*COGNAV Project | June 2026*
+*NAVGUARD Project | June 2026*

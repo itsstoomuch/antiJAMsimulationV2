@@ -4,9 +4,9 @@
 
 ---
 
-## 1. Math model review → COGNAV_MathModelling_v2_CORRECTED.md (v2.1)
+## 1. Math model review → NAVGUARD_MathModelling_v2_CORRECTED.md (v2.1)
 
-Reviewed `COGNAV_MathModelling.md` (draft 1.0), found and fixed these errors (full list in the v2 doc's Section 0):
+Reviewed `NAVGUARD_MathModelling.md` (draft 1.0), found and fixed these errors (full list in the v2 doc's Section 0):
 
 - **E10 (worst):** §10.3 "post-correlation C/N₀ = −54.7 dBHz" was wrong in arithmetic and concept. Correct: **C/N₀ = 45.3 dB-Hz** nominal; processing gain does not enter C/N₀. Added Betz jamming-equivalent C/N₀ formula; thresholds: acquisition ≈ 33–35 dB-Hz, tracking ≈ 25–28 dB-Hz.
 - **E2:** Kronecker order must be **a_y ⊗ a_x** for element ordering (0,0),(1,0),(0,1),(1,1).
@@ -54,7 +54,7 @@ RIMCO Wall-E4 CRPA: 55×55×15 mm, 80 g, 5 W, 4 elements, 3 nulls, JSR 95 dB (1 
 - **SMA RF out = the product feature** (CRPA as drop-in active antenna) → analog nulling architecture (Arch 3) is the right base; pure digital can't do this without re-modulating.
 - Beatable: 1 Hz nav (→10 Hz), MTBF 2000 h, no jammer-bearing reporting (our differentiator).
 
-## 5. Final product plan → plan.md (COGNAV-P1)
+## 5. Final product plan → plan.md (NAVGUARD-P1)
 
 User direction: **ONE prototype, GPS L1 only, full use of analog nulling, drone-mounted, our own design** (not a Wall-E4 clone). Plan highlights:
 - 2×2 λ/2 (95.1 mm), ≥190×190 mm ground plane, ~200×200×30 mm, ≤350 g, **≤8 W** from 4S–6S bus, on the Ø330 drone base plate (prop-free zone, Ø406 props).
@@ -70,12 +70,12 @@ User direction: **ONE prototype, GPS L1 only, full use of analog nulling, drone-
 
 | File | What it is |
 | :-- | :-- |
-| `COGNAV_MathModelling_v2_CORRECTED.md` | v2.1 corrected math + §13 (source of truth) |
+| `NAVGUARD_MathModelling_v2_CORRECTED.md` | v2.1 corrected math + §13 (source of truth) |
 | `arch1.md` / `arch3.md` | corrected in place (the two operating modes) |
 | `ARCH_REVIEW_AND_HARDWARE.md` | comparison + BOM audit + T1/T2/T3 tiers + decision log |
-| `plan.md` | COGNAV-P1 single-prototype plan (current direction) |
+| `plan.md` | NAVGUARD-P1 single-prototype plan (current direction) |
 | `hardware_selection_prompt.md` | ready-to-run prompt: 9 selection blocks, 2–3 options each, 8 mandatory outputs (power/NF/phase budgets must close), India procurement, [VERIFY] rule |
-| `cognav_p1_block_diagram.png` + `make_block_diagram.py` | Arch 4 flight-prototype block diagram (green=analog path, blue=sensing, orange=control, gray=support) |
+| `navguard_p1_block_diagram.png` + `make_block_diagram.py` | Arch 4 flight-prototype block diagram (green=analog path, blue=sensing, orange=control, gray=support) |
 | `SESSION_CONTEXT_2026-06-11.md` | this file |
 
 ## 7. Standing decisions (do not relitigate without new data)
@@ -88,4 +88,4 @@ User direction: **ONE prototype, GPS L1 only, full use of analog nulling, drone-
 6. Honest spec language: 2 jammers with margin (3 = demonstrated max); null depth quoted separately from stacked JSR.
 7. Cal tone through coupler isolated ports is mandatory (fixes mismatch AND inter-chip phase).
 
-*COGNAV Project | session digest written 2026-06-11*
+*NAVGUARD Project | session digest written 2026-06-11*

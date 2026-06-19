@@ -1,4 +1,4 @@
-"""Render the COGNAV-P1 (Arch 4) flight-prototype block diagram to PNG.
+"""Render the NAVGUARD-P1 (Arch 4) flight-prototype block diagram to PNG.
 
 Layout: four horizontal analog channel chains feeding a vertical Wilkinson
 combiner (the analog GPS path), with the digital sensing brain along the
@@ -46,7 +46,7 @@ def line(pts, color="#222222", lw=1.5, ls="-", z=2):
 
 
 # ---------------- title ----------------
-ax.text(82, 103.2, "COGNAV-P1  —  L1 Analog-Nulling CRPA (Arch 4)  —  Flight Prototype",
+ax.text(82, 103.2, "NAVGUARD-P1  —  L1 Analog-Nulling CRPA (Arch 4)  —  Flight Prototype",
         ha="center", fontsize=15.5, fontweight="bold")
 ax.text(82, 99.8, "GPS L1 1575.42 MHz only  |  2×2 RHCP array, d = λ/2 = 95.1 mm  |  "
         "jammer suppressed in ANALOG domain before any ADC  |  ≤ 8 W from 4S–6S drone bus",
@@ -166,6 +166,6 @@ for dy, (style, lab) in enumerate([
 ax.text(3, 92.2, "4× identical analog channels  (CH1–CH4, top→bottom)",
         fontsize=8, color="#4e7a3a", style="italic")
 
-fig.savefig("/Users/atharvrathod/antiJAMsimulation/cognav_p1_block_diagram.png",
+fig.savefig("/Users/atharvrathod/antiJAMsimulation/navguard_p1_block_diagram.png",
             dpi=200, bbox_inches="tight", facecolor="white")
 print("saved")

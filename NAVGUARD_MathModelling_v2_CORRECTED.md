@@ -1,4 +1,4 @@
-# COGNAV-4 Mathematical Modelling — CORRECTED
+# NAVGUARD-4 Mathematical Modelling — CORRECTED
 
 ## CRC Hybrid Analog-Digital Anti-Jamming System — GPS L1 1575.42 MHz
 
@@ -213,7 +213,7 @@ The BPSK-decorrelation assumption (jammer ⊥ GPS) stands; it fails only for rep
 
 **Proof.** w ∈ ℂ^M has M complex DOF. The constraint set {wᴴa_s = 1, wᴴa_k = 0, k = 1..K} is a linear system Cᴴw = [1,0,…,0]ᵀ with C = [a_s, a_1, …, a_K] ∈ ℂ^{M×(K+1)}. A solution exists for generic geometry iff rank(C) = K+1 ≤ M, i.e. **K ≤ M−1**; the solution set is then an affine subspace of dimension M−(K+1) = **M−K−1** — these are the DOF left for noise minimization, robustness, and pattern control. At K = M−1 the solution is the unique w = C^{-ᴴ}e₁: zero margin, so any perturbation (steering error, coupling, a 4th jammer) has no free dimension to absorb it and null depths collapse. For K > M−1 the system is overdetermined — exact nulls are impossible and MVDR instead minimizes total residual jammer power (shallow, shared nulls). Hence M_min = K + 2 for one DOF of margin. ∎
 
-For COGNAV-4: M = 4, K = 3 is the **zero-margin** operating point — quote it as a demonstrated extreme, and quote K = 2 (one DOF margin) as the design point.
+For NAVGUARD-4: M = 4, K = 3 is the **zero-margin** operating point — quote it as a demonstrated extreme, and quote K = 2 (one DOF margin) as the design point.
 
 ### 5.8 Null Depth vs Angular Error ✅ DERIVED (item #9)
 
@@ -547,4 +547,4 @@ removes both the inter-chip offset and the §9.1 static mismatch in a single mea
 ---
 
 *End of corrected document. Version 2.1 — Fable review complete.*
-*COGNAV Project — June 2026*
+*NAVGUARD Project — June 2026*

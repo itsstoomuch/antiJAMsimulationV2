@@ -1,6 +1,6 @@
-# PROMPT — Hardware Architecture Selection for COGNAV-P1 (L1 Analog-Nulling CRPA Prototype)
+# PROMPT — Hardware Architecture Selection for NAVGUARD-P1 (L1 Analog-Nulling CRPA Prototype)
 
-> Use this prompt verbatim (with an engineering assistant or as a design-review brief) to generate the precise, datasheet-verified hardware selection for the flight prototype defined in plan.md. Companion context files: plan.md, arch3.md, ARCH_REVIEW_AND_HARDWARE.md, COGNAV_MathModelling_v2_CORRECTED.md.
+> Use this prompt verbatim (with an engineering assistant or as a design-review brief) to generate the precise, datasheet-verified hardware selection for the flight prototype defined in plan.md. Companion context files: plan.md, arch3.md, ARCH_REVIEW_AND_HARDWARE.md, NAVGUARD_MathModelling_v2_CORRECTED.md.
 
 ---
 
@@ -81,4 +81,4 @@ Confirm u-blox M10 module choice (specific module PN), IMU (ICM-42688 vs BMI088)
 
 ---
 
-*hardware_selection_prompt.md — feed to the hardware-selection session for COGNAV-P1. Derived from plan.md (June 2026).*
+*hardware_selection_prompt.md — feed to the hardware-selection session for NAVGUARD-P1. Derived from plan.md (June 2026).*

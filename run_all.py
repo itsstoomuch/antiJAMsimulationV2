@@ -1,5 +1,5 @@
 """
-run_all.py — COGNAV-4 master pipeline.
+run_all.py — NAVGUARD-4 master pipeline.
 
 Runs all four simulation modules in sequence and generates one
 publication-quality 4-panel figure saved as publication_figure.png.
@@ -132,7 +132,7 @@ er_pass = extended_range is not None and extended_range > 10
 SEP = "═" * 50
 print()
 print(SEP)
-print("  COGNAV-4 SIMULATION — COMPLETE PIPELINE RESULTS")
+print("  NAVGUARD-4 SIMULATION — COMPLETE PIPELINE RESULTS")
 print(SEP)
 print(f"  Array         : 2x2 URA, 4 elements, d=9.52 cm")
 print(f"  Frequency     : GPS L1 1575.42 MHz")
@@ -159,7 +159,7 @@ print(f"  Hybrid fails at    : {fh_str}")
 print(f"  Extended range     : {er_str}")
 print(f"  Improvement at 30dB: {improvement_30:.1f} dB")
 print()
-print(f"  COGNAV-4 TARGET COMPLIANCE:")
+print(f"  NAVGUARD-4 TARGET COMPLIANCE:")
 print(f"  DoA accuracy < 1°   : {'PASS' if max_error < 1.0 else 'FAIL'} ({max_error:.2f}°)")
 print(f"  Null depth > 40 dB  : {'PASS' if min(null_depths) > 40 else 'FAIL'} ({min(null_depths):.0f} dB min)")
 print(f"  Hybrid range > 10 dB: {'PASS' if er_pass else 'FAIL'} ({er_str})")
@@ -180,7 +180,7 @@ pattern_db = pattern_db - pattern_db.max()  # normalise: 0 dB at peak
 with plt.style.context('dark_background'):
     fig = plt.figure(figsize=(14, 9))
     fig.suptitle(
-        "COGNAV-4 Hybrid Analog-Digital Anti-Jamming\n"
+        "NAVGUARD-4 Hybrid Analog-Digital Anti-Jamming\n"
         "Pre-Hardware Simulation | 4-Element 2×2 URA | GPS L1",
         fontsize=14, fontweight='bold', y=0.98,
     )
@@ -329,7 +329,7 @@ with plt.style.context('dark_background'):
     ]
     hdr = "─" * 43
     lines = [
-        "  COGNAV-4 SIMULATION SUMMARY",
+        "  NAVGUARD-4 SIMULATION SUMMARY",
         f"  {hdr}",
         f"  {'Parameter':<16}  {'Target':>8}  {'Result':>8}  {'Pass':>4}",
         f"  {hdr}",
@@ -403,7 +403,7 @@ try:
     # ── realistic_comparison.png : 1×2 dark panels ────────────────────────────
     with plt.style.context('dark_background'):
         figR, (axA, axB) = plt.subplots(1, 2, figsize=(14, 5))
-        figR.suptitle("COGNAV-4 — Ideal vs Realistic (hardware imperfections)",
+        figR.suptitle("NAVGUARD-4 — Ideal vs Realistic (hardware imperfections)",
                       fontsize=13, fontweight='bold')
 
         # Panel A — MUSIC pseudospectrum, ideal vs realistic

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NAVGUARD — Anti-Jam Simulation</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Top bar ─────────────────────────────────────────────── -->
+  <div id="top-bar">
+    <span id="app-title">NAVGUARD ANTI-JAM SIM</span>
+    <span id="version-tag">v1.0</span>
+    <div id="step-badges">
+      <span class="step-badge active" data-step="init">INIT</span>
+      <span class="step-badge"        data-step="generate">GENERATE</span>
+      <span class="step-badge"        data-step="music">MUSIC</span>
+      <span class="step-badge"        data-step="mvdr">MVDR</span>
+      <span class="step-badge"        data-step="hybrid">HYBRID</span>
+    </div>
+  </div>
+
+  <!-- ── Main: 3-D scene + HUD ───────────────────────────────── -->
+  <div id="main">
+    <div id="scene-container"></div>
+
+    <div id="hud-panel">
+      <div class="hud-placeholder" id="hud-placeholder">HUD — Section 5 will fill this</div>
+    </div>
+  </div>
+
+  <!-- ── Bottom status bar ───────────────────────────────────── -->
+  <div id="status-bar">
+    <span class="status-item" id="status-backend">BACKEND: CONNECTING…</span>
+    <span class="status-item" id="status-scenario">SCENARIO: --</span>
+    <span class="status-item" id="status-step">STEP: IDLE</span>
+    <span class="status-item" id="status-timing">LAST CALL: --</span>
+  </div>
+
+  <!-- ── Three.js core ───────────────────────────────────────── -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+
+  <!-- ── App modules (order matters) ────────────────────────── -->
+  <script src="api.js"></script>
+  <script src="scene.js"></script>
+  <script src="jammers.js"></script>
+  <script src="radiation.js"></script>
+  <script src="hud.js"></script>
+
+  <!-- ── Bootstrap ───────────────────────────────────────────── -->
+  <script>
+    /**
+     * Advance the pipeline step badges.
+     * steps: init → generate → music → mvdr → hybrid
+     *
+     * badges before active index → 'done' (green border)
+     * badge at active index      → 'active' (solid green bg)
+     * badges after                → inactive (dim)
+     */
+    function setStep(stepName) {
+      const order = ['init', 'generate', 'music', 'mvdr', 'hybrid'];
+      const idx   = order.indexOf(stepName);
+      if (idx === -1) return;
+
+      document.querySelectorAll('.step-badge').forEach((badge, i) => {
+        badge.classList.remove('active', 'done');
+        if (i < idx)       badge.classList.add('done');
+        else if (i === idx) badge.classList.add('active');
+      });
+
+      if (window.sceneState) window.sceneState.currentStep = stepName;
+    }
+    window.setStep = setStep;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      /* Initialise all modules */
+      SceneAPI.init('scene-container');
+      JammersAPI.init();
+      RadiationAPI.init();
+      HUDAPI.init();
+
+      /* Probe backend */
+      NavguardAPI.getConfig()
+        .then(cfg => {
+          console.log('Backend connected:', cfg);
+          const el = document.getElementById('status-backend');
+          el.textContent = 'BACKEND: ONLINE';
+          el.classList.add('active');
+        })
+        .catch(err => {
+          console.warn('Backend unreachable:', err);
+          const el = document.getElementById('status-backend');
+          el.textContent = 'BACKEND: OFFLINE';
+          el.classList.add('error');
+        });
+    });
+  </script>
+
+</body>
+</html>
