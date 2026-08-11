@@ -29,7 +29,9 @@ would be decoration with no measurement behind it.
 from __future__ import annotations
 
 import argparse
+import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -100,7 +102,32 @@ class LiveRadio:
     def set_gain(self, g):
         self.usrp.set_rx_gain(float(g), self.channel)
 
-    def read(self, n_samples: int) -> np.ndarray:
+    def read(self, n_samples: int, retries: int = 1) -> tuple[np.ndarray, int]:
+        """Read a burst, retrying once if it was corrupted by an overflow.
+
+        The stall that causes an overflow here is transient -- it coincides with
+        the GUI redrawing on the main thread -- so an immediate retry usually
+        lands in a quiet gap. The count from the LAST attempt is what is
+        returned, so a clean retry correctly reports zero.
+        """
+        for attempt in range(retries + 1):
+            samples, overflows = self._read_once(n_samples)
+            if overflows == 0 or attempt == retries:
+                return samples, overflows
+        return samples, overflows
+
+    def _read_once(self, n_samples: int) -> tuple[np.ndarray, int]:
+        """Return (samples, overflow_count).
+
+        The overflow count is NOT cosmetic and must not be swallowed. An
+        overflow drops samples mid-burst, and since the remaining samples are
+        packed in contiguously the code phase jumps at the seam. Coherent
+        integration across that seam partially cancels, which shows up as a
+        LOWER C/N0 -- indistinguishable from a genuinely weaker signal unless
+        the count is surfaced. Reporting a degraded number as if it were a
+        measurement is how a host-side scheduling hiccup gets mistaken for an
+        antenna problem.
+        """
         cmd = self.uhd.types.StreamCMD(self.uhd.types.StreamMode.num_done)
         cmd.num_samps = int(n_samples)
         cmd.stream_now = True
@@ -109,19 +136,23 @@ class LiveRadio:
         md = self.uhd.types.RXMetadata()
         out = np.empty(int(n_samples), dtype=np.complex64)
         got = 0
+        overflows = 0
         deadline = time.time() + 5.0
         while got < n_samples and time.time() < deadline:
             n = self.streamer.recv(self.buf, md, 2.0)
-            if md.error_code != self.uhd.types.RXMetadataErrorCode.none:
-                if md.error_code == self.uhd.types.RXMetadataErrorCode.timeout:
+            code = md.error_code
+            if code != self.uhd.types.RXMetadataErrorCode.none:
+                if code == self.uhd.types.RXMetadataErrorCode.timeout:
                     break
+                if code == self.uhd.types.RXMetadataErrorCode.overflow:
+                    overflows += 1
                 continue
             if n == 0:
                 continue
             take = min(n, n_samples - got)
             out[got:got + take] = self.buf[0, :take]
             got += take
-        return out[:got]
+        return out[:got], overflows
 
 
 # =====================================================================
@@ -138,6 +169,7 @@ class Frame:
     clipped: float = 0.0
     gain: float = 0.0
     elapsed: float = 0.0
+    overflows: int = 0
     note: str = ""
 
 
@@ -178,7 +210,7 @@ class Worker(threading.Thread):
 
             t0 = time.time()
             try:
-                iq = self.radio.read(need)
+                iq, overflows = self.radio.read(need)
             except Exception as exc:
                 self.q.put(Frame(note=f"read failed: {exc}"))
                 time.sleep(1.0)
@@ -208,8 +240,175 @@ class Worker(threading.Thread):
 
             self.q.put(Frame(results=results, psd_db=psd_db, freqs_mhz=freqs,
                              rms=rms, peak=peak, clipped=clipped,
-                             gain=self.radio.gain(),
+                             gain=self.radio.gain(), overflows=overflows,
                              elapsed=time.time() - t0))
+
+
+# =====================================================================
+# SECTION 2b -- gnss-sdr DECODE
+# =====================================================================
+
+TRACK_RE = re.compile(
+    r"Tracking of GPS L1 C/A signal started on channel (\d+) for satellite "
+    r"GPS PRN (\d+)(?:\s*\(Block (\S+)\))?", re.IGNORECASE)
+LOSS_RE = re.compile(
+    r"Loss of lock in channel (\d+), satellite GPS PRN (\d+)", re.IGNORECASE)
+NAV_RE = re.compile(
+    r"New GPS NAV message received in channel (\d+).*?PRN (\d+)", re.IGNORECASE)
+EPH_RE = re.compile(r"Ephemeris.*?satellite GPS PRN (\d+)", re.IGNORECASE)
+
+
+@dataclass
+class SatState:
+    prn: int
+    block: str = "?"
+    locked: bool = False
+    starts: int = 0
+    losses: int = 0
+    nav: int = 0
+
+
+class DecodeState:
+    """What gnss-sdr is managing to do with the signal, accumulated over a run.
+
+    Kept separate from acquisition on purpose. Acquisition answers "is the
+    satellite there"; this answers "can it be held long enough to read". A
+    chain can pass the first and fail the second by a wide margin, and that gap
+    is the whole diagnosis when a fix does not appear.
+    """
+
+    def __init__(self):
+        self.sats: dict[int, SatState] = {}
+        self.fixes: list[dict] = []
+        self.finished = False
+        self.source = ""
+
+    def feed(self, line: str) -> str | None:
+        m = TRACK_RE.search(line)
+        if m:
+            prn = int(m.group(2))
+            s = self.sats.setdefault(prn, SatState(prn))
+            s.block = m.group(3) or s.block
+            s.locked = True
+            s.starts += 1
+            return None
+        m = LOSS_RE.search(line)
+        if m:
+            prn = int(m.group(2))
+            s = self.sats.setdefault(prn, SatState(prn))
+            s.locked = False
+            s.losses += 1
+            return None
+        m = NAV_RE.search(line) or EPH_RE.search(line)
+        if m:
+            prn = int(m.group(m.lastindex))
+            self.sats.setdefault(prn, SatState(prn)).nav += 1
+            return None
+        m = gf.POSITION_RE.search(line)
+        if m:
+            sm = gf.SATS_RE.search(line)
+            fix = {"lat": float(m.group(1)), "lon": float(m.group(2)),
+                   "alt": float(m.group(3)),
+                   "sats": int(sm.group(1)) if sm else 0}
+            self.fixes.append(fix)
+            return (f"FIX  lat {fix['lat']:.6f}  lon {fix['lon']:.6f}  "
+                    f"alt {fix['alt']:.0f} m  sats {fix['sats']}")
+        return None
+
+    def summary(self) -> str:
+        if not self.sats:
+            return ("  waiting for gnss-sdr...\n\n  (acquisition takes a few "
+                    "seconds before the\n   first satellite appears)")
+        rows = sorted(self.sats.values(),
+                      key=lambda s: (-s.locked, -s.nav, -s.starts, s.prn))
+        held = sum(1 for s in rows if s.locked)
+        out = [f"  {len(rows)} PRN seen   {held} locked now   "
+               f"{len(self.fixes)} fix(es)", ""]
+        out.append("  PRN  block      state   locks  losses  nav")
+        out.append("  " + "-" * 44)
+        for s in rows[:14]:
+            state = "LOCKED" if s.locked else "  lost"
+            out.append(f"  {s.prn:3d}  {s.block:<9.9s} {state}  {s.starts:5d}"
+                       f"  {s.losses:6d}  {s.nav:3d}")
+        out.append("  " + "-" * 44)
+        if self.fixes:
+            f = self.fixes[-1]
+            out.append(f"  POSITION  {f['lat']:.6f}, {f['lon']:.6f}")
+            out.append(f"  altitude  {f['alt']:.1f} m   satellites {f['sats']}")
+        else:
+            total_loss = sum(s.losses for s in rows)
+            out.append("  NO POSITION.")
+            if total_loss:
+                out.append(f"  {total_loss} lock losses -- tracking cannot hold")
+                out.append("  the 30 s of continuous lock an ephemeris needs.")
+                out.append("  That is link budget, not tuning.")
+        if self.finished:
+            out.append("")
+            out.append("  [replay finished]")
+        return "\n".join(out)
+
+
+class GnssSdrRunner(threading.Thread):
+    """Runs gnss-sdr on a RECORDING, not on the radio.
+
+    Only one process can hold a B210 at a time, and this GUI already has it for
+    live acquisition. Pointing gnss-sdr at the same board would simply fail to
+    open it, so it decodes a previously captured file instead. The panel is
+    labelled accordingly -- conflating a live number with a replayed one is how
+    a stale result gets read as a current one.
+    """
+
+    def __init__(self, iq_path, gnss_sdr_bin, outdir, q, stop_ev,
+                 pll_bw=15.0, dll_bw=1.0, channels=10):
+        super().__init__(daemon=True)
+        self.iq_path = iq_path
+        self.bin = gnss_sdr_bin
+        self.outdir = outdir
+        self.q = q
+        self.stop_ev = stop_ev
+        self.pll_bw, self.dll_bw, self.channels = pll_bw, dll_bw, channels
+        self.proc = None
+
+    def run(self):
+        import os
+        import shutil
+        import subprocess
+
+        exe = shutil.which(self.bin) or self.bin
+        if not os.path.exists(exe):
+            self.q.put(("log", f"gnss-sdr not found at {self.bin}"))
+            return
+        if not os.path.exists(self.iq_path):
+            self.q.put(("log", f"no recording at {self.iq_path}"))
+            return
+
+        meta = gf.read_sidecar(self.iq_path)
+        fs = float(meta.get("sample_rate", gf.DEFAULT_FS))
+        fmt = meta.get("format", "sc16")
+        os.makedirs(self.outdir, exist_ok=True)
+        conf = os.path.join(self.outdir, "gpsgui_decode.conf")
+        gf.write_file_conf(conf, self.iq_path, fs, fmt, self.outdir,
+                           channels=self.channels, pll_bw=self.pll_bw,
+                           dll_bw=self.dll_bw)
+        self.q.put(("log", f"gnss-sdr replaying {os.path.basename(self.iq_path)}"
+                           f" ({meta.get('seconds','?')} s)"))
+        try:
+            self.proc = subprocess.Popen(
+                [exe, f"--config_file={conf}"], stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in self.proc.stdout:
+                if self.stop_ev.is_set():
+                    break
+                self.q.put(("line", line.rstrip()))
+        except Exception as exc:
+            self.q.put(("log", f"gnss-sdr failed: {exc}"))
+        finally:
+            if self.proc:
+                try:
+                    self.proc.terminate()
+                except Exception:
+                    pass
+            self.q.put(("done", ""))
 
 
 # =====================================================================
@@ -226,13 +425,15 @@ MUTED = "#5b6478"
 
 
 class Dashboard:
-    def __init__(self, root, args, radio, out_q, stop_ev, gain_q):
+    def __init__(self, root, args, radio, out_q, stop_ev, gain_q, decode_q):
         self.root = root
         self.args = args
         self.radio = radio
         self.q = out_q
         self.stop_ev = stop_ev
         self.gain_q = gain_q
+        self.decode_q = decode_q
+        self.decode = DecodeState()
         self.fill_history: list[float] = []
         self.cn0_history: list[float] = []
         self.frames = 0
@@ -254,6 +455,7 @@ class Dashboard:
                  f"Doppler +/-{args.doppler_max/1000:.0f} kHz")
         self.log("GPS is ~20 dB below the noise floor -- a flat spectrum is "
                  "correct. Judge the chain by C/N0, not by the spectrum.")
+        self._refresh_decode()
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(200, self.poll)
@@ -313,13 +515,29 @@ class Dashboard:
     def _build_log(self):
         wrap = tk.Frame(self.root, bg=BG)
         wrap.pack(fill="both", padx=12, pady=(2, 10))
-        self.logbox = tk.Text(wrap, height=9, bg="#0d1017", fg=FG,
+
+        left = tk.Frame(wrap, bg=BG)
+        left.pack(side="left", fill="both", expand=True)
+        tk.Label(left, text="LOG", bg=BG, fg=MUTED, anchor="w",
+                 font=("Menlo", 10, "bold")).pack(fill="x")
+        self.logbox = tk.Text(left, height=11, bg="#0d1017", fg=FG,
                               insertbackground=FG, font=("Menlo", 11),
                               relief="flat", wrap="word")
-        sb = ttk.Scrollbar(wrap, command=self.logbox.yview)
+        sb = ttk.Scrollbar(left, command=self.logbox.yview)
         self.logbox.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.logbox.pack(side="left", fill="both", expand=True)
+
+        right = tk.Frame(wrap, bg=BG)
+        right.pack(side="right", fill="both", padx=(12, 0))
+        self.decode_title = tk.Label(
+            right, text="GNSS-SDR DECODE", bg=BG, fg=MUTED, anchor="w",
+            font=("Menlo", 10, "bold"))
+        self.decode_title.pack(fill="x")
+        self.decodebox = tk.Text(right, height=11, width=52, bg="#0d1017",
+                                 fg=FG, font=("Menlo", 11), relief="flat",
+                                 wrap="none")
+        self.decodebox.pack(fill="both", expand=True)
         self.logbox.tag_config("good", foreground=GOOD)
         self.logbox.tag_config("warn", foreground=WARN)
         self.logbox.tag_config("bad", foreground=BAD)
@@ -350,8 +568,38 @@ class Dashboard:
                 self.log(frame.note, "bad")
             else:
                 self.render(frame)
+
+        dirty = False
+        try:
+            while True:
+                kind, payload = self.decode_q.get_nowait()
+                if kind == "line":
+                    note = self.decode.feed(payload)
+                    if note:
+                        self.log(note, "good")
+                    dirty = True
+                elif kind == "log":
+                    self.log(payload, "muted")
+                elif kind == "done":
+                    self.decode.finished = True
+                    self.log("gnss-sdr replay finished", "muted")
+                    dirty = True
+        except queue.Empty:
+            pass
+        if dirty:
+            self._refresh_decode()
+
         if not self.stop_ev.is_set():
             self.root.after(250, self.poll)
+
+    def _refresh_decode(self):
+        self.decodebox.delete("1.0", "end")
+        self.decodebox.insert("1.0", self.decode.summary())
+        n_fix = len(self.decode.fixes)
+        self.decode_title.configure(
+            text=("GNSS-SDR DECODE  (replay of recording)"
+                  + ("  -- FIX" if n_fix else "")),
+            fg=(GOOD if n_fix else MUTED))
 
     def render(self, f: Frame):
         self.frames += 1
@@ -364,16 +612,22 @@ class Dashboard:
         self.fill_history = self.fill_history[-120:]
         self.cn0_history = self.cn0_history[-120:]
 
+        ovf = f"   OVF {f.overflows}" if f.overflows else ""
         self.status.configure(
             text=(f"{len(hits)} satellite(s)   best C/N0 "
                   f"{best:5.1f} dB-Hz   gain {f.gain:.0f} dB   "
                   f"fill {f.rms*100:5.2f}%   scan {f.elapsed:.1f}s   "
-                  f"#{self.frames}"),
-            fg=(GOOD if len(hits) >= 4 else WARN if hits else BAD))
+                  f"#{self.frames}{ovf}"),
+            fg=(BAD if f.overflows else
+                GOOD if len(hits) >= 4 else WARN if hits else BAD))
 
         self.verdict.configure(text=self._verdict(f, hits, best),
-                               fg=(GOOD if len(hits) >= 4
+                               fg=(BAD if f.overflows else
+                                   GOOD if len(hits) >= 4
                                    else WARN if hits else BAD))
+        if f.overflows and self.frames % 5 == 1:
+            self.log(f"{f.overflows} overflow(s) -- C/N0 understated this scan",
+                     "bad")
 
         if self.frames == 1 or len(hits) != getattr(self, "_last_n", -1):
             self._last_n = len(hits)
@@ -391,6 +645,11 @@ class Dashboard:
         self.canvas.draw_idle()
 
     def _verdict(self, f, hits, best):
+        if f.overflows:
+            return (f"{f.overflows} OVERFLOW(S) this scan -- the host dropped "
+                    "samples, so the code phase jumps mid-window and the C/N0 "
+                    "shown is UNDERSTATED. Do not judge the antenna from this "
+                    "scan. Reduce --noncoherent-ms or close other load first.")
         if f.clipped > 1e-4:
             return ("CLIPPING -- the front end is saturated. Lower the gain "
                     "until this clears; nothing above is trustworthy.")
@@ -503,6 +762,16 @@ def main(argv=None):
     # does not need.
     p.add_argument("--doppler-step", type=float, default=500.0)
     p.add_argument("--pfa", type=float, default=gf.DEFAULT_PFA)
+    p.add_argument("--decode-file", default="/tmp/gpsfix/gps_ch1.iq",
+                   help="recording for the gnss-sdr decode panel. It replays a "
+                        "FILE because only one process can hold the B210 and "
+                        "this GUI has it for live acquisition.")
+    p.add_argument("--no-decode", action="store_true",
+                   help="skip the gnss-sdr panel")
+    p.add_argument("--gnss-sdr", default="gnss-sdr")
+    p.add_argument("--pll-bw", type=float, default=15.0)
+    p.add_argument("--dll-bw", type=float, default=1.0)
+    p.add_argument("--outdir", default="/tmp/gpsfix")
     args = p.parse_args(argv)
 
     print(f"opening serial={args.serial} channel {args.channel} ...")
@@ -512,11 +781,19 @@ def main(argv=None):
 
     out_q: queue.Queue = queue.Queue()
     gain_q: queue.Queue = queue.Queue()
+    decode_q: queue.Queue = queue.Queue()
     stop_ev = threading.Event()
     Worker(radio, args, out_q, stop_ev, gain_q).start()
 
+    if not args.no_decode and os.path.exists(args.decode_file):
+        GnssSdrRunner(args.decode_file, args.gnss_sdr, args.outdir, decode_q,
+                      stop_ev, args.pll_bw, args.dll_bw).start()
+    elif not args.no_decode:
+        decode_q.put(("log", f"no recording at {args.decode_file} -- run "
+                             "gpsfix.py --record first for the decode panel"))
+
     root = tk.Tk()
-    Dashboard(root, args, radio, out_q, stop_ev, gain_q)
+    Dashboard(root, args, radio, out_q, stop_ev, gain_q, decode_q)
     try:
         root.mainloop()
     except KeyboardInterrupt:
